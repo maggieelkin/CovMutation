@@ -11,45 +11,8 @@ import torch
 import ray
 from MutationHelpers import *
 import argparse
-from DataHelpers import rename_multicol_df, check_directory
+from DataHelpers import rename_multicol_df, check_directory, combine_seq_dicts
 import uuid
-
-
-def parent_child_candidates(tree_nodes, cut_off='2022-1-1'):
-    """
-    function to get unique parent-child sequences from tree_nodes dict
-    :param tree_nodes: dictionary of key = node_id, value = Node
-    :type tree_nodes: dict
-    :param cut_off: cut off date, get nodes that are after this date
-    :type cut_off: str
-    :return: dictionary of parent-child candidates, key = parentid, value = dict ('children' = list of child_ids)
-    :rtype: dict
-    """
-    cut_off_datetime = datetime.strptime(cut_off, '%Y-%m-%d')
-    post_cutoff = pd.DataFrame()
-    i = 0
-    for node_id, node in tree_nodes.items():
-        if node.date > cut_off_datetime and not node.leaf:
-            parent_id = node_id
-            parent_seq = node.spike_seq
-            for child_id in node.children:
-                child_node = tree_nodes[child_id]
-                muts = child_node.node_spike_mutations
-                muts = [x for x in muts if x.find('-') == -1]
-                if len(muts) > 0:
-                    child_seq = child_node.spike_seq
-                    row = pd.DataFrame({
-                        'parent_id': parent_id,
-                        'child_id': child_id,
-                        'parent_seq': parent_seq,
-                        'child_seq': child_seq
-                    }, index=[i])
-                    i = i + 1
-                    post_cutoff = post_cutoff.append(row)
-    post_cutoff = post_cutoff.drop_duplicates(subset=['parent_seq', 'child_seq'], keep='first')
-    post_cutoff = post_cutoff[['parent_id', 'child_id']]
-    candidates = post_cutoff.groupby('parent_id')['child_id'].apply(list).to_dict()
-    return candidates
 
 
 def candidates_by_mutations(tree_nodes, sig_muts):
@@ -140,14 +103,14 @@ def realign_candidates(candidates, tree_nodes, sig_muts, train_seq=None):
                 if parent_seq[parent_pos] == wt:
                     corrected_mut = "{}{}{}".format(wt, parent_pos + 1, mutted)
                     ref_mut = [x for x in muts_from_ref if x[1:] == mut[1:]][0]
-                    #corrected_mut_map[corrected_mut] = mut
+                    # corrected_mut_map[corrected_mut] = mut
                     corrected_mut_map[corrected_mut] = ref_mut
             if len(corrected_mut_map) > 0:
                 corrected_muts = list(corrected_mut_map.keys())
                 child_dict = {
                     'child_id': child_id,
                     'node_muts': node_muts,
-                    #'aln_muts': aln_muts,
+                    # 'aln_muts': aln_muts,
                     'corrected_muts': corrected_muts,
                     'corrected_mut_map': corrected_mut_map
                 }
@@ -157,46 +120,6 @@ def realign_candidates(candidates, tree_nodes, sig_muts, train_seq=None):
                     parent_child[parent_id] = []
                 parent_child[parent_id].append(child_dict)
     return parent_child
-
-
-def biotrans_probabilities(seq, bio_trans, forward_mode=True):
-    """
-
-    :param bio_trans:
-    :type bio_trans:
-    :param seq:
-    :type seq:
-    :param forward_mode:
-    :type forward_mode:
-    :return:
-    :rtype:
-    """
-    if forward_mode:
-        probabilities = bio_trans.compute_probabilities([seq], pass_mode='forward')
-    else:
-        probabilities = bio_trans.compute_probabilities([seq], pass_mode='masked')
-    probabilities = probabilities[0]
-    return probabilities
-
-
-def mutate_parent(parent_seq, bio_trans, forward_mode=True, sig_muts=None):
-    """
-
-    :param forward_mode: if true, use forward mode, else masked mode, default is true
-    :type forward_mode: bool
-    :param parent_seq:
-    :type parent_seq:
-    :param bio_trans:
-    :type bio_trans:
-    :param sig_muts:
-    :type sig_muts:
-    :return:
-    :rtype:
-    """
-    seq_muts = mutate_seq_insilico(parent_seq, significant_mutations=sig_muts)
-    probabilities = biotrans_probabilities(parent_seq, bio_trans, forward_mode=forward_mode)
-    seq_muts = get_mutation_probabilities(parent_seq, probabilities, seqs_mutated=seq_muts)
-    return seq_muts
 
 
 def mark_significant(seq_muts, sig_mut_lst):
@@ -284,6 +207,7 @@ class BioTransExpSettings(object):
     """
 
     """
+
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=False,
                  cut_off='2022-1-1'):
         self.cut_off = cut_off
@@ -326,8 +250,10 @@ class BioTransExpSettings(object):
             norm = 'l1'
         else:
             norm = 'l2'
-        self.seq_change_path = self.data_folder + '/tree_v{}_seq_{}_change_{}.pkl'.format(self.tree_version, norm, train_str)
-        self.seq_prob_path = self.data_folder + '/tree_v{}_seq_{}_prob_{}.pkl'.format(self.tree_version, mode_str, train_str)
+        self.seq_change_path = self.data_folder + '/tree_v{}_seq_{}_change_{}.pkl'.format(self.tree_version, norm,
+                                                                                          train_str)
+        self.seq_prob_path = self.data_folder + '/tree_v{}_seq_{}_prob_{}.pkl'.format(self.tree_version, mode_str,
+                                                                                      train_str)
 
 
 class MutateParentChild(BioTransExpSettings):
@@ -336,7 +262,8 @@ class MutateParentChild(BioTransExpSettings):
     """
 
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=True):
-        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off='2022-1-1')
+        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change,
+                         cut_off='2022-1-1')
         self.train_seq = None
         self.mutation_data = None
         self.new_mutations = None
@@ -348,7 +275,7 @@ class MutateParentChild(BioTransExpSettings):
         self.seq_probabilities = {}
         self.seq_change = {}
         # dict to hold counter of aln_mut - count ref_mut
-        #xself.aln_mapped_cnt = {}
+        # xself.aln_mapped_cnt = {}
         self.results = pd.DataFrame()
         self.results_summary = pd.DataFrame()
         self.prep_data()
@@ -360,15 +287,19 @@ class MutateParentChild(BioTransExpSettings):
         print('prepping parent child')
         self.prep_parent_child()
 
-    def run_experiment(self, excel=True, save_class=False, include_change=True, threshold_max=3, save_name=None,
+    def run_experiment(self, excel=True, save_class=False, include_change=True, save_name=None,
                        load_previous=False, subset_parentids=None, **kwargs):
         """
         kwargs include: prob_seq_batchsize (chunksize for sequences in probabilities); prob_batchsize (batchsize for
         biotrans compute probabiltiies); seq_batchsize (batches for embdding); embedding_batchsize
         (batchsize for biotrans embedding)
 
-        :param threshold_max: max threshold for mutate_parents, default is 3
-        :type threshold_max: int
+        :param save_name: save name if loading different save base name
+        :type save_name: str
+        :param subset_parentids: list of parentids to subset experiment to
+        :type subset_parentids: list
+        :param load_previous: load previous saved results, skips experiment
+        :type load_previous: bool
         :param include_change: if true, calculate embedding semantic change
         :type include_change: bool
         :param excel: if true, save data in excel format
@@ -381,12 +312,12 @@ class MutateParentChild(BioTransExpSettings):
         :rtype:
         """
         if subset_parentids is not None:
-            self.parent_child = {k:self.parent_child[k] for k in subset_parentids}
+            self.parent_child = {k: self.parent_child[k] for k in subset_parentids}
         self.sequence_language_model_values(include_change=include_change, **kwargs)
         if load_previous:
             self.load_exp_results(save_name=save_name, excel=excel)
         else:
-            self.mutate_parents(include_change=include_change, threshold_max=threshold_max)
+            self.mutate_parents(include_change=include_change)
             self.mut_summary()
             self.save_data(excel=excel, save_class=save_class, save_name=save_name)
 
@@ -398,7 +329,8 @@ class MutateParentChild(BioTransExpSettings):
         self.new_mutations = self.mutation_data[(self.mutation_data['first_date'] >= self.cut_off)]
         self.new_mutations['pos'] = self.new_mutations['pos'].astype(int)
         self.new_muts = self.new_mutations['mutation'].values.tolist()
-        self.old_muts = self.mutation_data[~(self.mutation_data.mutation.isin(self.new_muts))]['mutation'].values.tolist()
+        self.old_muts = self.mutation_data[~(self.mutation_data.mutation.isin(self.new_muts))][
+            'mutation'].values.tolist()
         # load reference results
         ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
         ref = pd.read_pickle(ref_path)
@@ -414,7 +346,7 @@ class MutateParentChild(BioTransExpSettings):
         self.parent_child = candidates_by_mutations(self.tree_nodes, self.ref_exp_muts)
         self.parent_child = realign_candidates(self.parent_child, self.tree_nodes, self.ref_exp_muts, self.train_seq)
         # get the counter maps
-        #all_mut_cnt = self.mutation_data.set_index(['pos','mut']).n_times.to_dict()
+        # all_mut_cnt = self.mutation_data.set_index(['pos','mut']).n_times.to_dict()
         all_mut_cnt = self.mutation_data.set_index(['mutation']).n_times.to_dict()
         for parent_id, children in self.parent_child.items():
             for child_meta in children:
@@ -422,11 +354,11 @@ class MutateParentChild(BioTransExpSettings):
                 # mapped_cnt is key = significant mutation, value = frequency of reference mapped mutation
                 child_meta['mapped_cnt'] = {}
                 for aln, aln_mapped in mapped.items():
-                    #wt, pos, alt = pullout_pos_mut(aln_mapped)
-                    #cnt = all_mut_cnt[(pos, alt)]
+                    # wt, pos, alt = pullout_pos_mut(aln_mapped)
+                    # cnt = all_mut_cnt[(pos, alt)]
                     cnt = all_mut_cnt[aln_mapped]
                     child_meta['mapped_cnt'][aln] = cnt
-                    #self.aln_mapped_cnt[aln] = cnt
+                    # self.aln_mapped_cnt[aln] = cnt
         # sub records in for testing
         # keys = list(self.parent_child.keys())[0:10]
         # self.parent_child = {key: self.parent_child[key] for key in keys}
@@ -442,7 +374,8 @@ class MutateParentChild(BioTransExpSettings):
         print('Total Unique Parent Sequences: {}'.format(len(self.seqs)))
 
     def sequence_language_model_values(self, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
-                                       embedding_batchsize=40, include_change=True, run_chunked_change=False, combine=False):
+                                       embedding_batchsize=40, include_change=True, run_chunked_change=False,
+                                       combine=False):
         self.get_sequences()
         print('checking saved probabilities')
         seqs_for_proba, self.seq_probabilities = find_previous_saved(self.seqs, self.seq_prob_path)
@@ -491,14 +424,14 @@ class MutateParentChild(BioTransExpSettings):
         check_directory(change_folder)
         suffix = self.seq_change_path.split('/')[-1]
         change_save_files = []
-        #if os.path.isfile(self.seq_change_path):
+        # if os.path.isfile(self.seq_change_path):
         #    change_save_files.append(self.seq_change_path)
         for file in os.listdir(change_folder):
             if file.endswith(suffix):
-                change_save_files.append(change_folder+'/'+file)
+                change_save_files.append(change_folder + '/' + file)
         current_save_path = change_folder + '/{}_{}'.format(str_id, suffix)
 
-        seq_dict = self.combine_seq_dicts(file_list = change_save_files)
+        seq_dict = combine_seq_dicts(file_list=change_save_files)
         self.seq_change.update(seq_dict)
         seqs_for_change = []
         for seq in self.seqs:
@@ -507,75 +440,24 @@ class MutateParentChild(BioTransExpSettings):
         if len(seqs_for_change) > 0:
             print('computing semantic change for {} sequences'.format(len(seqs_for_change)))
             self.seq_change = embedding_change_batchs(seqs=seqs_for_change, bio_trans=bio_trans,
-                                                    seq_batchsize=seq_batchsize,
-                                                    embedding_batchsize=embedding_batchsize,
-                                                    seq_change=self.seq_change,
-                                                    save_path=current_save_path,
-                                                    chunksize=list_seq_batchsize, l1_norm=self.l1_change)
+                                                      seq_batchsize=seq_batchsize,
+                                                      embedding_batchsize=embedding_batchsize,
+                                                      seq_change=self.seq_change,
+                                                      save_path=current_save_path,
+                                                      chunksize=list_seq_batchsize, l1_norm=self.l1_change)
             print('Saving {} sequence semantic change'.format(len(self.seq_change)))
             with open(current_save_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
         if combine:
             if os.path.isfile(self.seq_change_path):
                 change_save_files.append(self.seq_change_path)
-            seq_dict = self.combine_seq_dicts(file_list=change_save_files)
+            seq_dict = combine_seq_dicts(file_list=change_save_files)
             self.seq_change.update(seq_dict)
             print('Saving {} combined sequence semantic change'.format(len(self.seq_change)))
             with open(self.seq_change_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
 
-
-    def combine_seq_dicts(self, file_list):
-        seq_dict = {}
-        for file in file_list:
-            with open(file, 'rb') as f:
-                values = pickle.load(f)
-            seq_dict.update(values)
-        return seq_dict
-
-
-
-
-    def parent_probabilities(self):
-        if self.forward_mode:
-            mode_str = 'forward'
-        else:
-            mode_str = 'masked'
-        if self.finetuned:
-            train_str = 'ft'
-        else:
-            train_str = 'pretrain'
-        seq_prob_path = self.data_folder + '/tree_v{}_seq_{}_prob_{}.pkl'.format(self.tree_version, mode_str, train_str)
-        if os.path.isfile(seq_prob_path):
-            print('previous saved probabilities found')
-            print(seq_prob_path)
-            with open(seq_prob_path, 'rb') as file:
-                self.seq_probabilities = pickle.load(file)
-        else:
-            print('no previous saved probabilities')
-        seqs = []
-        for node_id, node in self.tree_nodes.items():
-            if node.root and node.spike_seq not in self.seq_probabilities:
-                seqs.append(node.spike_seq)
-        for k, v in self.parent_child.items():
-            seq = self.tree_nodes[k].spike_seq
-            if seq not in self.seq_probabilities:
-                seqs.append(seq)
-        seqs = list(set(seqs))
-        print("computing probabilities for {} sequences.".format(len(seqs)))
-        if len(seqs) > 0:
-            n_gpu = torch.cuda.device_count()
-            ray.init()
-            bio_trans = BioTransformers(backend="protbert", num_gpus=n_gpu)
-            if self.model_path is not None:
-                bio_trans.load_model(self.model_path)
-            for seq in seqs:
-                probabilities = biotrans_probabilities(seq, bio_trans, forward_mode=self.forward_mode)
-                self.seq_probabilities[seq] = probabilities
-        with open(seq_prob_path, 'wb') as file:
-            pickle.dump(self.seq_probabilities, file)
-
-    def mutate_parents(self, threshold_max=3, include_change=True):
+    def mutate_parents(self, include_change=True):
         data_list = []
         for parent_id, children in tqdm(self.parent_child.items(), desc='Unique Parent Children'):
             parent_seq = self.tree_nodes[parent_id].spike_seq
@@ -607,7 +489,7 @@ class MutateParentChild(BioTransExpSettings):
                 # run with only new muts
                 mut_map = child_meta['corrected_mut_map']
                 sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
-                #key = sig mut, value = frequency of reference mapped mutation
+                # key = sig mut, value = frequency of reference mapped mutation
                 mapped_cnt = child_meta['mapped_cnt']
                 freqs = [mapped_cnt[x] for x in sig_muts]
                 freqs = [x - 1 for x in freqs]
@@ -719,7 +601,6 @@ class MutateParentChild(BioTransExpSettings):
                 print("Designated Savefile doesn't exist!")
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description='ParentChild Mutate experiment')
     parser.add_argument('--tree_version', type=int, help='Tree Version for models')
@@ -759,7 +640,7 @@ if __name__ == "__main__":
                                          finetuned=args.finetuned,
                                          forward_mode=args.masked_mode,
                                          data_folder=args.data_folder,
-                                         l1_change = args.l2_norm)
+                                         l1_change=args.l2_norm)
     print("masked mode arg: {}".format(args.masked_mode))
     print("Finetuned is: {}".format(parent_child_exp.finetuned))
     print("Forward Mode is: {}".format(parent_child_exp.forward_mode))
@@ -771,12 +652,6 @@ if __name__ == "__main__":
     else:
         sub_parentids = None
 
-
-
-    #params = {'list_seq_batchsize': 15,
-    #          'prob_batchsize': 20,
-    #          'seq_batchsize': 400,
-    #          'embedding_batchsize': 40}
     params = {'list_seq_batchsize': args.list_seq_batchsize,
               'prob_batchsize': args.prob_batchsize,
               'seq_batchsize': args.seq_batchsize,

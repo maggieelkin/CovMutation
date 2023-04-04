@@ -5,6 +5,8 @@ import csv
 import os
 import pandas as pd
 from itertools import islice
+import pickle
+
 
 def write_tsv_file(dataframe, save_path):
     """
@@ -31,6 +33,22 @@ def read_tsv_file(path):
     """
     df = pd.read_csv(path, sep='\t', header=0)
     return df
+
+
+def combine_seq_dicts(file_list):
+    """
+    takes a list of saved dictionary paths and combines them into 1 dictionary
+    :param file_list: list of saved dictionaries
+    :type file_list: list
+    :return: combined dictionary
+    :rtype: dict
+    """
+    seq_dict = {}
+    for file in file_list:
+        with open(file, 'rb') as f:
+            values = pickle.load(f)
+        seq_dict.update(values)
+    return seq_dict
 
 
 def chunks(l, n):
