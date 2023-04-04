@@ -1,0 +1,13 @@
+numpy~=1.18.5
+Bio
+tensorflow~=2.8.0
+
+pandas~=1.3.4
+tqdm~=4.62.3
+pyyaml~=6.0
+pathogenie~=0.4.0
+torch~=1.8.1
+ray~=1.8.0
+scikit-learn~=1.0.1
+scipy~=1.7.2
+matplotlib~=3.4.3
