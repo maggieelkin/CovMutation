@@ -219,6 +219,8 @@ def prob_auc_solo(df, gt_column, plot=False, plot_title=None, save_path=None):
 def ranking_auc(value_array, gt_idx, rank_high_low=True):
     """
 
+    :param rank_high_low:
+    :type rank_high_low:
     :param value_array:
     :type value_array:
     :param gt_idx:
@@ -304,134 +306,6 @@ def mutation_rank_results(array, gt_idx, title, plot=True, **kwargs):
     return results
 
 
-def prob_auc_array(prob, gt_idx, plot=False, plot_title=None, save_path=None):
-    # number of ground truth to search for (Y Axis)
-    n_gt = sum(gt_idx)
-    # number of mutations tested (X Axis)
-    max_consider = len(prob)
-    # X axis
-    n_consider = np.array([i + 1 for i in range(max_consider)])
-    # norm AUC
-    norm = max_consider * n_gt
-    # prob
-    prob_rank = ss.rankdata(-prob)[gt_idx]
-    n_prob = np.array([sum(prob_rank <= i + 1) for i in range(max_consider)])
-    prob_auc = auc(n_consider, n_prob) / norm
-    mean_rank = np.mean(prob_rank)
-    max_rank = np.max(prob_rank)
-    min_rank = np.min(prob_rank)
-    if plot:
-        plt.figure()
-        plt.plot(n_consider, n_prob)
-        plt.plot(n_consider, n_consider * (n_gt / max_consider),
-                 c='gray', linestyle='--')
-
-        plt.xlabel(r'$ \log_{10}() $')
-        plt.ylabel(r'$ \log_{10}(\Delta \mathbf{\hat{z}}) $')
-
-        plt.legend([
-            r'$ \hat{p}(x_i | \mathbf{x}_{[N] ∖ \{i\} }) $ only,' +
-            (' AUC = {:.3f}'.format(prob_auc)),
-            'Random guessing, AUC = 0.500'
-        ])
-        plt.xlabel('Top N')
-        plt.ylabel('Number of escape mutations in top N')
-        if plot_title:
-            plt.title(plot_title)
-        plt.show()
-        if save_path is not None:
-            plt.savefig(save_path)
-    return prob_auc, mean_rank, max_rank, min_rank
-
-
-def combine_model_tree(model_df, tree_df):
-    """
-    combines a df with all mutations from reference
-    :param model_df:
-    :type model_df: pandas.DataFrame
-    :param tree_df: muttation summary filtered to mutations after the cut-off
-    :type tree_df: pandas.DataFrame
-    :return:
-    :rtype:
-    """
-    if 'word' in model_df:
-        model_df.rename(columns={'word': 'mut'}, inplace=True)
-    model_df['pos'] = model_df['pos'].astype(int)
-    prob_df = model_df.merge(tree_df, on=['pos', 'mut', 'mutation'], how='left')
-    prob_df['tree_mut_all'] = prob_df['n_times'] > 0
-    prob_df['tree_mut_all'] = prob_df['tree_mut_all'].astype(bool)
-    prob_df['tree_mut_max1'] = prob_df['n_times'] > 1
-    prob_df['tree_mut_max1'] = prob_df['tree_mut_max1'].astype(bool)
-    prob_df['tree_mut_max2'] = prob_df['n_times'] > 2
-    prob_df['tree_mut_max2'] = prob_df['tree_mut_max2'].astype(bool)
-    return prob_df
-
-
-def prep_tree_version_results(tree_version, run_pretrained=False, cut_off='2021-8-1', **kwargs):
-    """
-
-    :param run_pretrained: if true, check the pre-trained version as well as fine tuned version
-    :type run_pretrained:
-    :param cut_off:
-    :type cut_off:
-    :param cut_off: date to filter the tree mutation summary, get mutations that happened after the date,
-    default is 81/2021
-    :type cut_off: str
-    :param tree_version: version number of tree sampling
-    :type tree_version: int
-    :return: a dataframe to run AUC calculations on
-    :rtype: pd.DataFrame
-    """
-    folder = 'data/processed/ncbi_tree_v{}'.format(tree_version)
-    tree_df = pd.read_pickle(folder + '/leaf_mutts_tree_v{}.pkl'.format(tree_version))
-    tree_df = tree_df[(tree_df['first_date'] >= cut_off)]
-    # remove deletion mutations
-    tree_df = tree_df[~(tree_df['mutation'].str.contains('-'))]
-    tree_df['pos'] = tree_df['pos'].astype(int)
-    if run_pretrained:
-        results_path = 'results/protbert_pretrained.pkl'
-        model_name = 'ProtBert PreTrained'
-        training = 'PreTrained'
-    else:
-        results_path = 'results/tree_results/tree_v{}/protbert_tree_v{}_ft.pkl'.format(tree_version, tree_version)
-        model_name = 'ProtBert FT'
-        training = 'FineTuned'
-    model_df = pd.read_pickle(results_path)
-    prob_df = combine_model_tree(model_df, tree_df)
-    n_escape = sum(prob_df['significant'])
-    sig_dict = {'mapped': 'Escape', 'cut_off': 'N/A', 'n_muts': n_escape, 'n_times': "N/A"}
-    n_muts_all = sum(prob_df['tree_mut_all'])
-    mut_all_dict = {'mapped': 'freq(x)>0', 'cut_off': cut_off, 'n_muts': n_muts_all, 'n_times': 0}
-    n_muts_max1 = sum(prob_df['tree_mut_max1'])
-    mut_n1_dict = {'mapped': 'freq(x)>1', 'cut_off': cut_off, 'n_muts': n_muts_max1, 'n_times': 1}
-    n_muts_max2 = sum(prob_df['tree_mut_max2'])
-    mut_n2_dict = {'mapped': 'freq(x)>2', 'cut_off': cut_off, 'n_muts': n_muts_max2, 'n_times': 2}
-    results_mapping = {'significant': sig_dict,
-                       'tree_mut_all': mut_all_dict,
-                       'tree_mut_max1': mut_n1_dict,
-                       'tree_mut_max2': mut_n2_dict}
-    df = pd.DataFrame()
-    index = 0
-    for gt_column, mapped in results_mapping.items():
-        title = "{} Tree V{} {}".format(model_name, tree_version, mapped['mapped'])
-        cscs_auc, change_auc, prob_auc = cscs(prob_df, gt_column, plot=True, plot_title=title, **kwargs)
-        df_row = pd.DataFrame({
-            'cut_off': mapped['cut_off'],
-            'n_mutations': mapped['n_muts'],
-            'n_times_max': mapped['n_times'],
-            'cscs_auc': cscs_auc,
-            'change_auc': change_auc,
-            'prob_auc': prob_auc,
-            'training': training,
-            'tree version': 'V{}'.format(tree_version),
-            'gt': mapped['mapped'],
-            'model': title
-        }, index=[index])
-        df = df.append(df_row)
-        index = index + 1
-    return df
-
-
 def seq_mutation_dict_results(seq_mutation_dict):
     """
     takes sequence mutation dictionary (from get_seq_mutation_dict) and returns AUC
@@ -453,16 +327,3 @@ def seq_mutation_dict_results(seq_mutation_dict):
         prob_auc = prob_auc_solo(df, 'significant')
         results['prob_auc'] = prob_auc
     return results
-
-
-if __name__ == "__main__":
-    results_df = pd.DataFrame()
-    versions = [3, 4]
-    types = {'prob_col': 'masked_prob'}
-    for version in versions:
-        print('Version {}'.format(version))
-        pretrained_version = prep_tree_version_results(version, run_pretrained=True, **types)
-        results_df = results_df.append(pretrained_version)
-        trained_version = prep_tree_version_results(version, **types)
-        results_df = results_df.append(trained_version)
-    results_df.to_excel('reports/baseline_tree/protbert_ft_results_maskedmode.xlsx')

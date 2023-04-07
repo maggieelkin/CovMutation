@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from PhyloTreeParsers import Node
 from BioTransLanguageModel import *
-from MutationRankingResults import mutation_rank_results, combine_model_tree, seq_mutation_dict_results
+from MutationRankingResults import mutation_rank_results, seq_mutation_dict_results
 from tqdm import tqdm
 from biotransformers import BioTransformers
 import torch
@@ -333,10 +333,8 @@ class MutateParentChild(BioTransExpSettings):
             'mutation'].values.tolist()
         # load reference results
         ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
-        ref = pd.read_pickle(ref_path)
-        tree_df = self.new_mutations[~(self.new_mutations['mutation'].str.contains('-'))]
-        self.ref_results = combine_model_tree(ref, tree_df)
-        self.ref_exp_muts = self.ref_results[(self.ref_results['tree_mut_all'])]['mutation'].values.tolist()
+        self.ref_results = pd.read_pickle(ref_path)
+        self.ref_exp_muts = self.new_mutations[(self.new_mutations['mut_type']=='sub')]['mutation'].values.tolist()
         # load train_seq
         train_seq_path = self.exp_folder + '/train_seq.pkl'
         with open(train_seq_path, 'rb') as file:
