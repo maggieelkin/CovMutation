@@ -306,6 +306,58 @@ def mutation_rank_results(array, gt_idx, title, plot=True, **kwargs):
     return results
 
 
+def new_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn'):
+    """
+
+    :param df:
+    :type df:
+    :param gt_column:
+    :type gt_column:
+    :param prob_col:
+    :type prob_col:
+    :param change_col:
+    :type change_col:
+    :param attn_col:
+    :type attn_col:
+    :return:
+    :rtype:
+    """
+    prob = np.array(df[prob_col])
+    change = np.array(df[change_col])
+    attn = np.array(df[attn_col])
+    df[gt_column] = df[gt_column].astype(bool)
+    gt_idx = np.array(df[gt_column])
+
+    beta = 1
+
+    acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob))
+    cscs_auc = ranking_auc(acquisition, gt_idx)
+    cscs_auc = cscs_auc['auc']
+
+    new_acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob)) + ss.rankdata(-attn)
+    n_cscs = ranking_auc(new_acquisition, gt_idx)
+    new_cscs_auc = n_cscs['auc']
+
+    prob = ranking_auc(prob, gt_idx)
+    prob_auc = prob['auc']
+
+    # semantic change
+    change = ranking_auc(change, gt_idx, rank_high_low=False)
+    change_auc = change['auc']
+
+    # Attn
+    attn = ranking_auc(attn, gt_idx, rank_high_low=False)
+    attn_auc = attn['auc']
+
+    results = {'new_cscs_auc': new_cscs_auc,
+               'cscs_auc': cscs_auc,
+               'change_auc': change_auc,
+               'prob_auc': prob_auc,
+               'attn_auc': attn_auc}
+
+    return results
+
+
 def seq_mutation_dict_results(seq_mutation_dict):
     """
     takes sequence mutation dictionary (from get_seq_mutation_dict) and returns AUC
@@ -318,7 +370,9 @@ def seq_mutation_dict_results(seq_mutation_dict):
     """
     df = pd.DataFrame(seq_mutation_dict.values())
     results = {}
-    if 'change' in df.columns.tolist():
+    if 'change' and 'attn' in df.columns.tolist():
+        results = new_cscs(df, 'significant')
+    elif 'change' in df.columns.tolist():
         cscs_auc, change_auc, prob_auc = cscs(df, 'significant')
         results['cscs_auc'] = cscs_auc
         results['change_auc'] = change_auc

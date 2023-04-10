@@ -67,27 +67,6 @@ def compare_two_seq(s1, s2):
     print('done comparing')
 
 
-def get_mutations(ref, seq):
-    """
-    function to get a list of mutations between reference sequence and mutated sequence
-    #TODO: this fails if the sequecnes aren't the same length
-    :param ref: reference sequence
-    :type ref: str
-    :param seq: sequence to compare against reference
-    :type seq: str
-    :return: list of mutations of RefAA [Position (from 1)] MutAA
-    :rtype: list
-    """
-    ref = remove_end_star(ref)
-    seq = remove_end_star(seq)
-    mutts = []
-    for i, aa in enumerate(ref):
-        if ref[i] != seq[i]:
-            mut = aa + str(i + 1) + seq[i]
-            mutts.append(mut)
-    return mutts
-
-
 def mutate_sequence(seq, mutations, ignore_deletion=True, early_stop=True):
     """
     function to change a sequence based on list of mutations
@@ -135,7 +114,7 @@ def sort_mut_list(muts):
     :rtype: lst
     """
     mut_dict = {}
-    #muts = node_muts_from_ref(muts)
+    # muts = node_muts_from_ref(muts)
     for mut in muts:
         pos = int(mut[1:-1])
         mut_dict[pos] = mut
@@ -434,7 +413,7 @@ def ref_seq_pos_map(reference, sequence=None, mutations=None):
         alt = mut[-1]
         if alt == '-':
             # have to append pos - 1 b/c the mutations have indexed from 1 and positions are indexed from 0
-            dels.append(pos-1)
+            dels.append(pos - 1)
     pos_map = {}
     i = 0
     j = 0
@@ -466,8 +445,6 @@ def remap_to_seq(position_map, position_dict):
             continue
         dict_to_seq[alt_pos] = position_dict[ref_pos]
     return dict_to_seq
-
-
 
 
 def proba_to_df(seq, probabilities, sig_muts=None):
@@ -517,8 +494,8 @@ def pullout_pos_mut(mutation):
     if mut_type == 'ins':
         i = mutation.find(':')
         wt = np.nan
-        pos = int(mutation[:i])-1
-        mut = mutation[i+1:]
+        pos = int(mutation[:i]) - 1
+        mut = mutation[i + 1:]
     else:
         wt = mutation[0]
         pos = mutation[1:-1]

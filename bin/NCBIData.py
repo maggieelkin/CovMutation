@@ -206,7 +206,6 @@ def initial_metadata_filtering(meta_data=None):
     df[['country', 'division']] = df['country'].str.split(':', expand=True)
     df['country'] = df['country'].str.strip()
     # fix reference meta_data with proper isolate name ('Wuhan/Hu-1/2019') and date
-    # TODO: If other reference is needed, it needs to be fixed here.
     i = df[(df['Nucleotide Accession'] == 'NC_045512.2')].index[0]
     name_index = df.columns.tolist().index('Isolate Name')
     date_index = df.columns.tolist().index('Collection Date')

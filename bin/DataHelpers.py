@@ -51,17 +51,39 @@ def combine_seq_dicts(file_list):
     return seq_dict
 
 
+def folder_file_list(folder, suffix):
+    """
+    get a list of file paths in a folder if they end with a certain suffix
+    :param folder: folder to search
+    :type folder: str
+    :param suffix: suffix to check for
+    :type suffix: str
+    :return: file list
+    :rtype: list
+    """
+    save_files = []
+    # if os.path.isfile(self.seq_change_path):
+    #    change_save_files.append(self.seq_change_path)
+    for file in os.listdir(folder):
+        if file.endswith(suffix):
+            save_files.append(folder + '/' + file)
+    return save_files
+
+
 def chunks(l, n):
     n = max(1, n)
-    return (l[i:i+n] for i in range(0, len(l), n))
+    return (l[i:i + n] for i in range(0, len(l), n))
+
 
 def chunk_it(data, size):
     it = iter(data)
     for i in range(0, len(data), size):
-        yield {k:data[k] for k in islice(it, size)}
+        yield {k: data[k] for k in islice(it, size)}
+
 
 def chunk_dictionary(data, size):
     return list(chunk_it(data, size))
+
 
 def rename_multicol_df(df):
     """

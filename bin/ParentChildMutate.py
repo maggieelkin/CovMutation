@@ -11,13 +11,15 @@ import torch
 import ray
 from MutationHelpers import *
 import argparse
-from DataHelpers import rename_multicol_df, check_directory, combine_seq_dicts
+from DataHelpers import rename_multicol_df, check_directory, combine_seq_dicts, folder_file_list
 import uuid
 
 
-def candidates_by_mutations(tree_nodes, sig_muts):
+def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
     """
 
+    :param drop_by_muts:
+    :type drop_by_muts:
     :param tree_nodes:
     :type tree_nodes:
     :param sig_muts: list of mutations that determine the candidate child nodes
@@ -46,19 +48,24 @@ def candidates_by_mutations(tree_nodes, sig_muts):
                 child_node = tree_nodes[child_id]
                 muts = child_node.node_spike_mutations
                 muts = [x for x in muts if x.find('-') == -1]
-                muts_no_wt = [x[1:] for x in muts]
-                muts = [x for x in muts_no_wt if x in sig_muts_no_wt]
+                #muts_no_wt = [x[1:] for x in muts]
+                #muts = [x for x in muts_no_wt if x in sig_muts_no_wt]
+                muts = [x for x in muts if x[1:] in sig_muts_no_wt]
                 if len(muts) > 0:
                     child_seq = child_node.spike_seq
                     row = pd.DataFrame({
                         'parent_id': parent_id,
                         'child_id': child_id,
                         'parent_seq': parent_seq,
-                        'child_seq': child_seq
+                        'child_seq': child_seq,
+                        'muts': "; ".join(muts)
                     }, index=[i])
                     i = i + 1
                     post_cutoff = post_cutoff.append(row)
-    post_cutoff = post_cutoff.drop_duplicates(subset=['parent_seq', 'child_seq'], keep='first')
+    if drop_by_muts:
+        post_cutoff = post_cutoff.drop_duplicates(subset=['parent_seq', 'muts'], keep='first')
+    else:
+        post_cutoff = post_cutoff.drop_duplicates(subset=['parent_seq', 'child_seq'], keep='first')
     post_cutoff = post_cutoff[['parent_id', 'child_id']]
     candidates = post_cutoff.groupby('parent_id')['child_id'].apply(list).to_dict()
     return candidates
@@ -218,6 +225,7 @@ class BioTransExpSettings(object):
         self.l1_change = l1_change
         self.seq_change_path = None
         self.seq_prob_path = None
+        self.seq_attn_path = None
         self.exp_folder = self.data_folder + "/exp_settings"
         if model_folder is not None:
             self.model_folder = model_folder
@@ -254,6 +262,7 @@ class BioTransExpSettings(object):
                                                                                           train_str)
         self.seq_prob_path = self.data_folder + '/tree_v{}_seq_{}_prob_{}.pkl'.format(self.tree_version, mode_str,
                                                                                       train_str)
+        self.seq_attn_path = self.data_folder + '/tree_v{}_seq_attn_{}.pkl'.format(self.tree_version, train_str)
 
 
 class MutateParentChild(BioTransExpSettings):
@@ -274,8 +283,7 @@ class MutateParentChild(BioTransExpSettings):
         self.parent_child = {}
         self.seq_probabilities = {}
         self.seq_change = {}
-        # dict to hold counter of aln_mut - count ref_mut
-        # xself.aln_mapped_cnt = {}
+        self.seq_attn = {}
         self.results = pd.DataFrame()
         self.results_summary = pd.DataFrame()
         self.prep_data()
@@ -334,14 +342,14 @@ class MutateParentChild(BioTransExpSettings):
         # load reference results
         ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
         self.ref_results = pd.read_pickle(ref_path)
-        self.ref_exp_muts = self.new_mutations[(self.new_mutations['mut_type']=='sub')]['mutation'].values.tolist()
+        self.ref_exp_muts = self.new_mutations[(self.new_mutations['mut_type'] == 'sub')]['mutation'].values.tolist()
         # load train_seq
         train_seq_path = self.exp_folder + '/train_seq.pkl'
         with open(train_seq_path, 'rb') as file:
             self.train_seq = pickle.load(file)
 
     def prep_parent_child(self):
-        self.parent_child = candidates_by_mutations(self.tree_nodes, self.ref_exp_muts)
+        self.parent_child = candidates_by_mutations(self.tree_nodes, self.ref_exp_muts, drop_by_muts=True)
         self.parent_child = realign_candidates(self.parent_child, self.tree_nodes, self.ref_exp_muts, self.train_seq)
         # get the counter maps
         # all_mut_cnt = self.mutation_data.set_index(['pos','mut']).n_times.to_dict()
@@ -373,8 +381,14 @@ class MutateParentChild(BioTransExpSettings):
 
     def sequence_language_model_values(self, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
                                        embedding_batchsize=40, include_change=True, run_chunked_change=False,
-                                       combine=False):
+                                       combine=False, include_attn=False):
         self.get_sequences()
+        if include_attn:
+            print('checking saved attention changes')
+            seqs_for_attn, self.seq_attn = find_previous_saved(self.seqs, self.seq_attn_path)
+            if len(seqs_for_attn) > 0:
+                self.parent_attn_change_batched(list_seq_batchsize=list_seq_batchsize, combine=combine)
+
         print('checking saved probabilities')
         seqs_for_proba, self.seq_probabilities = find_previous_saved(self.seqs, self.seq_prob_path)
         if include_change:
@@ -412,6 +426,39 @@ class MutateParentChild(BioTransExpSettings):
                     with open(self.seq_change_path, 'wb') as a:
                         pickle.dump(self.seq_change, a)
 
+    def parent_attn_change_batched(self, list_seq_batchsize, pool_heads='max', pool_layer='max',
+                                   l1_norm=False, combine=False):
+        str_id = uuid.uuid1()
+        attn_folder = self.data_folder + '/attn_changes'
+        check_directory(attn_folder)
+        suffix = self.seq_attn_path.split('/')[-1]
+        attn_save_files = folder_file_list(attn_folder, suffix)
+        current_save_path = attn_folder + '/{}_{}'.format(str_id, suffix)
+        seq_dict = combine_seq_dicts(file_list=attn_save_files)
+        self.seq_attn.update(seq_dict)
+        seqs_for_attn = []
+        for seq in self.seqs:
+            if seq not in self.seq_attn:
+                seqs_for_attn.append(seq)
+        if len(seqs_for_attn) > 0:
+            print('computing attention change for {} sequences'.format(len(seqs_for_attn)))
+            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+            tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=self.model_path)
+            self.seq_attn = attention_change_batchs(seqs_for_attn, bio_trans, tokenizer, device, self.seq_attn,
+                                                    save_path=current_save_path, chunksize=list_seq_batchsize,
+                                                    pool_heads=pool_heads, pool_layer=pool_layer, l1_norm=l1_norm)
+            print('Saving {} sequence attention change'.format(len(self.seq_attn)))
+            with open(current_save_path, 'wb') as a:
+                pickle.dump(self.seq_attn, a)
+        if combine:
+            if os.path.isfile(self.seq_attn_path):
+                attn_save_files.append(self.seq_attn_path)
+            seq_dict = combine_seq_dicts(file_list=attn_save_files)
+            self.seq_attn.update(seq_dict)
+            print('Saving {} combined sequence semantic change'.format(len(self.seq_attn)))
+            with open(self.seq_attn_path, 'wb') as a:
+                pickle.dump(self.seq_attn, a)
+
     def parent_semantic_change_batched(self, bio_trans, seq_batchsize, embedding_batchsize, list_seq_batchsize,
                                        combine=False):
         str_id = uuid.uuid1()
@@ -421,12 +468,7 @@ class MutateParentChild(BioTransExpSettings):
             change_folder = self.data_folder + '/l2_changes'
         check_directory(change_folder)
         suffix = self.seq_change_path.split('/')[-1]
-        change_save_files = []
-        # if os.path.isfile(self.seq_change_path):
-        #    change_save_files.append(self.seq_change_path)
-        for file in os.listdir(change_folder):
-            if file.endswith(suffix):
-                change_save_files.append(change_folder + '/' + file)
+        change_save_files = folder_file_list(change_folder, suffix)
         current_save_path = change_folder + '/{}_{}'.format(str_id, suffix)
 
         seq_dict = combine_seq_dicts(file_list=change_save_files)
