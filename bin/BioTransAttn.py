@@ -1,7 +1,7 @@
 from ParentChildMutate import *
 from scipy import special
 from BioTransLanguageModel import *
-
+import time
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Biotransformer Attention Experiment')
@@ -21,6 +21,8 @@ def parse_args():
     parser.add_argument('--seq_path', type=str, default=None,
                         help='if provided, load a sequence in string format, '
                              'otherwise it will use reference')
+    parser.add_argument('--attn_seq_batchsize', type=int, default=200,
+                        help='sequence list batch for Attention')
     arguments = parser.parse_args()
     return arguments
 
@@ -43,7 +45,7 @@ if __name__ == '__main__':
     args = parse_args()
 
     print(args)
-
+    '''
     pc = MutateParentChild(tree_version=args.tree_version,
                            finetuned=args.finetuned,
                            forward_mode=args.masked_mode,
@@ -55,15 +57,19 @@ if __name__ == '__main__':
     print("L1 change is: {}".format(pc.l1_change))
 
     pc.run_experiment(include_change=True, load_previous=True, excel=False)
-
-    if args.seq_path is not None:
-        with open(args.seq_path, 'rb') as f:
-            seq = pickle.load(f)
-        using_ref = False
+    '''
+    if args.seq_path is None:
+        seq_path = 'data/processed/ncbi_tree_v1/NSCS_sub_v1/attn/parent/parent_seq.pkl'
     else:
-        seq = load_ref_spike()
-        seq = str(seq.seq)
-        using_ref = True
+        seq_path = args.seq_path
+
+    seqs = []
+    ref_seq = load_ref_spike()
+    ref_seq = str(ref_seq.seq)
+    seqs.append(ref_seq)
+    with open(args.seq_path, 'rb') as f:
+        parent_seq = pickle.load(f)
+    seqs.append(parent_seq)
 
     exp_folder = args.data_folder + "/exp_settings"
     file = open(exp_folder + "/model_folder.txt", "r")
@@ -72,55 +78,31 @@ if __name__ == '__main__':
 
     model_path = last_biotrans_ft_path(model_folder)
 
-    if using_ref:
-        save_path = args.save_folder+"/ref_attn_dict_l2.pkl"
-    else:
-        save_path = args.save_folder+"/parent_seq_attn_dict_l2.pkl"
+    save_path = args.save_folder+"/tree_v1_seq_attn_ft.pkl"
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    tokenizer, bio_trans_model_ft = load_biotrans_for_attn(device=device, model_path=model_path)
-
-    probabilities = pc.seq_probabilities[seq]
-    changes = pc.seq_change[seq]
-    seqs_mutated = mutate_seq_insilico(seq)
-
-    if using_ref:
-        muts = pc.results[(pc.results['result_type'] == 'New')]['ref_muts_str'].values.tolist()
-        all_muts = []
-        for m in muts:
-            m_lst = [x.strip() for x in m.split(';')]
-            all_muts.extend(m_lst)
-        all_muts = list(set(all_muts))
-    else:
-        all_muts = []
-        for parent_id, children in pc.parent_child.items():
-            s = pc.tree_nodes[parent_id].spike_seq
-            if s == seq:
-                for child_meta in children:
-                    sig_muts = child_meta['corrected_muts']
-                    mut_map = child_meta['corrected_mut_map']
-                    sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in pc.ref_exp_muts]
-                    all_muts.extend(sig_muts)
-        all_muts = list(set(all_muts))
-
-    seq_mutations = get_seq_mutation_dict(seq, probabilities, changes, all_muts)
-    df = pd.DataFrame(seq_mutations.values())
+    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
 
     seq_attn = {}
-    seqs_for_attn = [seq]
-    seq_attn = attention_change_batchs(seqs_for_attn, bio_trans_model_ft, tokenizer, device, seq_attn,
-                                            save_path=save_path, chunksize=10,
-                                            pool_heads='max', pool_layer='max', l1_norm=False)
-    mut_attn = seq_attn[seq]
+    start = time.time()
+    seq_attn = attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_attn=seq_attn,
+                                       seq_batchsize=args.attn_seq_batchsize,
+                                       save_path=save_path, pool_heads_max=True, pool_layer_max=True,
+                                       l1_norm=False)
+    end = time.time()
+    diff = end - start
+    print("Time to run 2 seqs: {}".format(diff))
 
-    df['mut_l2_max_pooled'] = df['mutation'].map(mut_attn)
+    print('Saving {} sequence attention change'.format(len(seq_attn)))
+    with open(save_path, 'wb') as a:
+        pickle.dump(seq_attn, a)
 
-    if using_ref:
-        save_path1 = args.save_folder+"/ref_attn_df1_l2.pkl"
-    else:
-        save_path1 = args.save_folder+"/parent_seq_attn_df1_l2.pkl"
 
-    df.to_pickle(save_path1)
+
+
+
+
+
 
 
 

@@ -2,7 +2,7 @@ import math
 import os
 import pickle
 from tqdm import tqdm
-from DataHelpers import chunks
+from DataHelpers import chunks, chunk_dictionary
 from biotransformers import BioTransformers
 import torch
 import ray
@@ -12,6 +12,7 @@ from transformers import BertForMaskedLM, BertTokenizer
 from biotransformers.lightning_utils.data import AlphabetDataLoader
 from biotransformers.lightning_utils.models import LightningModule
 import copy
+
 
 def biotrans_probabilities(bio_trans, seqs, batchsize, forward_mode=False):
     """
@@ -37,7 +38,7 @@ def biotrans_probabilities(bio_trans, seqs, batchsize, forward_mode=False):
     return seq_probabilities
 
 
-def compute_probabilities(bio_trans, seqs,  batchsize, chunksize=None, forward_mode=False, save_path=None,
+def compute_probabilities(bio_trans, seqs, batchsize, chunksize=None, forward_mode=False, save_path=None,
                           prior_seq_probabilities=None):
     """
     function to compute probabilities for a list of sequences
@@ -148,13 +149,30 @@ def load_biotrans_for_attn(device, model_path=None):
             warmup_updates=100,
             warmup_init_lr=1e-7,
             warmup_end_lr=1e-5,
-            )
+        )
         bio_trans = module.model.to(device)
     else:
         bio_trans = BertForMaskedLM.from_pretrained(model_dir, output_attentions=True).eval().to(device)
     return tokenizer, bio_trans
 
 
+def format_attention(attention):
+    """
+
+    :param attention:
+    :type attention:
+    :return:
+    :rtype:
+    """
+    squeezed = []
+    for layer_attention in attention:
+        layer_attention = layer_attention.cpu().detach().numpy()
+        if layer_attention.shape[0] == 1:
+            layer_attention = layer_attention.squeeze(0)
+        squeezed.append(layer_attention)
+    return np.stack(squeezed)
+
+'''
 def format_attention(attention, layers=None, heads=None):
     """
 
@@ -181,51 +199,75 @@ def format_attention(attention, layers=None, heads=None):
         squeezed.append(layer_attention)
     # num_layers x num_heads x seq_len x seq_len
     return torch.stack(squeezed)
+'''
 
 
-def get_attention(seq, tokenizer, model, device, pool_heads=None):
+def get_layer_attentions_per_sample(layer_attentions):
     """
 
-    :param seq:
-    :type seq:
+    :param layer_attentions:
+    :type layer_attentions:
+    :return:
+    :rtype:
+    """
+    attn_samples = []
+    if len(layer_attentions.shape) > 4:
+        attn = np.transpose(layer_attentions, (1, 0, 2, 3, 4))
+        for i in range(0, attn.shape[0]):
+            attn_samples.append(attn[i])
+    else:
+        attn_samples.append(layer_attentions)
+    return attn_samples
+
+
+def get_attention(seqs, tokenizer, model, device):
+    """
+
+    :param seqs:
+    :type seqs:
     :param tokenizer:
     :type tokenizer:
     :param model:
     :type model:
     :param device:
     :type device:
-    :param pool_heads:
-    :type pool_heads:
     :return:
     :rtype:
     """
-    seq_space = (" ").join(seq)
-    inputs_seq = tokenizer.encode_plus(seq_space, return_tensors='pt', add_special_tokens=True)
-    input_seq_ids = inputs_seq['input_ids']
+    separated_sequences_list = [" ".join(seq) for seq in seqs]
+    encoded_inputs = tokenizer(separated_sequences_list, return_tensors="pt",
+            padding=True).to("cpu")
+    input_seq_ids = encoded_inputs['input_ids']
     attention = model(input_seq_ids.to(device))[-1]
     layer_attentions = format_attention(attention)
-    layer_attentions = layer_attentions.cpu().detach().numpy()
-    if pool_heads=='mean':
-        layer_attentions = layer_attentions.mean(axis=1)
-    elif pool_heads=='max':
-        layer_attentions = layer_attentions.max(axis=1)
-    return layer_attentions
+    #layer_attentions = layer_attentions.cpu().detach().numpy()
+    sample_attentions = get_layer_attentions_per_sample(layer_attentions)
+    return sample_attentions
+    #return layer_attentions
 
 
-def pool_attention(layer_attentions, pool_layer='max'):
+def pool_attention(layer_attentions, pool_heads_max=True, pool_layer_max=True):
     """
+    pools heads first (axis 1) and then layers
+    default is max, does mean otherwise
 
+    :param pool_heads_max:
+    :type pool_heads_max:
     :param layer_attentions:
     :type layer_attentions:
-    :param pool_layer:
-    :type pool_layer:
+    :param pool_layer_max:
+    :type pool_layer_max:
     :return:
     :rtype:
     """
-    if pool_layer == 'max':
-        attn = layer_attentions.max(axis=0)
+    if pool_heads_max:
+        attn = layer_attentions.max(axis=1)
     else:
-        attn = layer_attentions.mean(axis=0)
+        attn = layer_attentions.mean(axis=1)
+    if pool_layer_max:
+        attn = attn.max(axis=0)
+    else:
+        attn = attn.mean(axis=0)
     return attn
 
 
@@ -280,7 +322,7 @@ def last_biotrans_ft_path(log_folder):
 
 
 def calculate_sequence_embedding(seqs, bio_trans, embedding_batchsize, seq_embed=None, save_path=None,
-                            chunksize=100, return_full=False):
+                                 chunksize=100, return_full=False):
     """
     function to calculate embedding (not change, just embedding of sequences)
 
@@ -343,10 +385,10 @@ def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embed
     seqs = list(seqs_mutated.keys())
     comb_batch = seq_batchsize
     n_batches = math.ceil(float(len(seqs)) / comb_batch)
-    #print('total batches: ', str(n_batches))
+    # print('total batches: ', str(n_batches))
 
     for batchi in range(n_batches):
-        #print('Batch #', str(batchi))
+        # print('Batch #', str(batchi))
         start = batchi * comb_batch
         end = (batchi + 1) * comb_batch
         subseqs = seqs[start:end]
@@ -410,7 +452,8 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
     seqs_chunked = list(chunks(seqs, chunksize))
     for seq_chunk in tqdm(seqs_chunked, desc='Chunked sequence list for semantic change'):
         for seq in tqdm(seq_chunk, desc='Sequences for semantic change'):
-            mutations_change = get_mutation_embedding_change(seq, bio_trans, seq_batchsize, embedding_batchsize, l1_norm)
+            mutations_change = get_mutation_embedding_change(seq, bio_trans, seq_batchsize, embedding_batchsize,
+                                                             l1_norm)
             seq_change[seq] = mutations_change
         if save_path is not None:
             with open(save_path, 'wb') as f:
@@ -418,40 +461,66 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
     return seq_change
 
 
-def attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_attn, save_path=None,
-                            chunksize=10, pool_heads='max', pool_layer='max', l1_norm=False):
-    seqs_chunked = list(chunks(seqs, chunksize))
-    for seq_chunk in tqdm(seqs_chunked, desc='Chunked sequence list for attention change'):
-        for seq in tqdm(seq_chunk, desc='Sequences for semantic change'):
-            mutations_attn = get_mutation_attention_change(seq=seq, bio_trans=bio_trans, tokenizer=tokenizer,
-                                                           device=device, pool_layer=pool_layer, pool_heads=pool_heads,
-                                                           l1_norm=l1_norm)
-            seq_attn[seq] = mutations_attn
-            if save_path is not None:
-                with open(save_path, 'wb') as f:
-                    pickle.dump(seq_attn, f)
-    return seq_attn
+def attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_batchsize, seq_attn=None, save_path=None,
+                            pool_heads_max=True, pool_layer_max=True, l1_norm=False):
+    """
+
+    :param seqs: list of seqs to mutate and get attention changes
+    :type seqs: list
+    :param bio_trans: biotrans model, loaded with output attentions = True
+    :type bio_trans: transformers.models.bert.modeling_bert.BertForMaskedLM
+    :param tokenizer: tokenizer for biotrans model
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :param device: device for model loading/offloading
+    :type device: torch.device
+    :param seq_attn: prior dictionary of key=seq, value = mutation attention changes
+    :type seq_attn: dict
+    :param seq_batchsize: number of mutation seqs to pass through bio_trans at one time
+    :type seq_batchsize: int
+    :param save_path: save path for seq_attn
+    :type save_path: str
+    :param pool_heads_max: if true, pool heads with max pooling
+    :type pool_heads_max: bool
+    :param pool_layer_max: if true, pool layers with max pooling
+    :type pool_layer_max: bool
+    :param l1_norm: to use L1 norm distance,default is False
+    :type l1_norm: bool
+    :return:
+    :rtype:
+    """
+    if seq_attn is None:
+        seq_attn_dict = {}
+    else:
+        seq_attn_dict = seq_attn
+    for seq in tqdm(seqs, desc='Sequences for attention change'):
+        mutations_attn = get_mutation_attention_change(seq_to_mutate=seq, bio_trans=bio_trans, tokenizer=tokenizer,
+                                                       device=device, seq_batchsize=seq_batchsize,
+                                                       pool_heads_max=pool_heads_max,
+                                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+        seq_attn_dict[seq] = mutations_attn
+        if save_path is not None:
+            with open(save_path, 'wb') as f:
+                pickle.dump(seq_attn_dict, f)
+    return seq_attn_dict
 
 
-def get_mutation_attention_change(seq, bio_trans, tokenizer, device, pool_heads='max', pool_layer='max',
-                                  l1_norm=False):
-    ref_attn = get_attention(seq=seq, tokenizer=tokenizer, model=bio_trans, device=device, pool_heads=pool_heads)
-    ref_attn = pool_attention(ref_attn, pool_layer=pool_layer)
-    mutation_seqs = mutate_seq_insilico(seq)
+def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, seq_batchsize, pool_heads_max=True,
+                                  pool_layer_max=True, l1_norm=False):
+    ref_attn = get_attention(seqs=[seq_to_mutate], tokenizer=tokenizer, model=bio_trans, device=device)
+    ref_attn = ref_attn[0]
+    ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
+    mutation_seqs = mutate_seq_insilico(seq_to_mutate)
     mutation_seqs = {mutation_seqs[s]['mutation']: s for s in list(mutation_seqs.keys())}
     mut_attn_changes = {}
-    for mut, mut_seq in tqdm(mutation_seqs.items(), desc="Mutation Attention"):
-        mut_attn = get_attention(mut_seq, tokenizer=tokenizer, model=bio_trans, device=device, pool_heads=pool_heads)
-        mut_attn = pool_attention(mut_attn, pool_layer=pool_layer)
-        attn_change = calc_array_distance(ref_attn, mut_attn, l1_norm=l1_norm)
-        mut_attn_changes[mut] = attn_change
+    chunked_mut_dict = chunk_dictionary(mutation_seqs, seq_batchsize)
+    for mut_dict in tqdm(chunked_mut_dict, desc='Mutated Sequences attentions'):
+        muts = list(mut_dict.keys())
+        mut_seqs = list(mut_dict.values())
+        mut_attns = get_attention(seqs=mut_seqs, tokenizer=tokenizer, model=bio_trans, device=device)
+        for i in range(0, len(mut_seqs)):
+            mut_attn = mut_attns[i]
+            mut = muts[i]
+            mut_attn = pool_attention(mut_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
+            attn_change = calc_array_distance(ref_attn, mut_attn, l1_norm=l1_norm)
+            mut_attn_changes[mut] = attn_change
     return mut_attn_changes
-
-
-
-
-
-
-
-
-

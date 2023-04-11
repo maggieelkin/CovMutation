@@ -1,9 +1,6 @@
-from DataHelpers import *
 from ParentChildMutate import *
-from PhyloTreeParsers import *
-from MutationRankingResults import cscs
-from scipy.spatial import distance
-import argparse
+from scipy import special
+from BioTransLanguageModel import *
 
 
 def parse_args():
@@ -19,110 +16,27 @@ def parse_args():
                         help='Folder for data to use in experiment')
     parser.add_argument('--include_change', action='store_true',
                         help='include change in experiment')
+    parser.add_argument('--save_folder', type=str,
+                        help='Folder for saving data')
+    parser.add_argument('--seq_path', type=str, default=None,
+                        help='if provided, load a sequence in string format, '
+                             'otherwise it will use reference')
     arguments = parser.parse_args()
     return arguments
 
 
-def get_results(sig_thres, df, prob_col='prob', change_col='change'):
-    results = pd.DataFrame()
-    i = 0
-    for sig_muts_str, threshold in sig_thres.items():
-        sig_muts = [x.strip() for x in sig_muts_str.split(';')]
-        df['sig'] = False
-        df['sig'] = df['mutation'].isin(sig_muts)
-        n_pos = sum(df['sig'])
-        cscs_auc, change_auc, prob_auc = cscs(df, 'sig', prob_col, change_col)
-        results_row = pd.DataFrame({
-            'sig_muts': sig_muts_str,
-            'threshold': threshold,
-            'n_pos': n_pos,
-            'cscs_auc': cscs_auc,
-            'change_auc': change_auc,
-            'prob_auc': prob_auc
-        }, index=[i])
-        results = results.append(results_row)
-        i = i + 1
-    return results
+def normalize_attn_mat(attn):
+    attn_sum = attn.sum()
+    norm_attn = attn/attn_sum
+    return norm_attn
 
 
-def get_results_summary(data):
-    groupby_col = ['threshold', 'sig_muts', 'n_pos', 'cscs_auc', 'change_auc', 'prob_auc']
-    groupby_col = [x for x in groupby_col if x in data]
-    agg_cols = ['cscs_auc', 'change_auc', 'prob_auc']
-    agg_dict = {}
-    agg_dict.update({x: 'mean' for x in agg_cols if x in data})
-    groupby_col = [x for x in groupby_col if x not in agg_dict]
-    data = data.groupby(groupby_col).agg(agg_dict).reset_index()
-    data['threshold'] = data['threshold'].astype(int)
-    thresholds = sorted(list(set(data['threshold'])))
-    agg_dict = {'n_pos': 'mean',
-                'cscs_auc': 'mean', 'change_auc': 'mean', 'prob_auc': 'mean',
-                }
-    agg_dict = {k: agg_dict[k] for k in list(agg_dict.keys()) if k in data}
-    summary = pd.DataFrame()
-    for threshold in thresholds:
-        df1 = pd.DataFrame(data[(data['threshold'] >= threshold)].agg(agg_dict)).T
-        # df1 = rename_multicol_df(df1)
-        df1.insert(1, 'threshold', threshold)
-        summary = summary.append(df1)
-    return summary
-
-
-def sliding_local_change(mut, ref_embed, mut_embed, window_size=7):
-    wt, pos, alt = pullout_pos_mut(mut)
-    local_changes = []
-    max_n = ref_embed.shape[0]
-    idx_starts = range(pos - window_size, pos + 2)
-    for i, idx_start in enumerate(idx_starts):
-        idx_1 = max([0, idx_start])
-        idx_stop = pos + i
-        idx_2 = min([max_n, idx_stop])
-        local_change = abs(ref_embed[idx_1:idx_2] - mut_embed[idx_1:idx_2]).sum()
-        local_changes.append(local_change)
-    avg_local_change = np.mean(local_changes)
-    return avg_local_change
-
-
-def calc_local_change(mut, ref_embed, mut_embed, window_size=7):
-    wt, pos, alt = pullout_pos_mut(mut)
-    diff = int(window_size / 2)
-    max_n = ref_embed.shape[0]
-    idx_1 = max([0, pos - diff])
-    idx_2 = min(max_n, pos + diff)
-    local_change = abs(ref_embed[idx_1:idx_2] - mut_embed[idx_1:idx_2]).sum()
-    return local_change
-
-
-def calc_change(ref_array, mut_dict, change_type):
-    mut_changes = {}
-    for mut, mut_array in tqdm(mut_dict.items(), desc='Calculating {}'.format(change_type)):
-        if change_type == 'l1':
-            change = abs(ref_array - mut_array).sum()
-        else:
-            change = np.sqrt(np.sum((ref_array - mut_array) ** 2))
-        mut_changes[mut] = change
-    return mut_changes
-
-
-
-def calc_agg_change(ref_array, mut_dict, change_type, agg_type):
-    if agg_type == 'mean':
-        ref_val = ref_array.mean(1)
-    else:
-        ref_val = ref_array.max(1)
-    mut_changes = {}
-    for mut, mut_array in tqdm(mut_dict.items(), desc='Calculating {}'.format(change_type)):
-        if agg_type == 'mean':
-            mut_val = mut_array.mean(1)
-        else:
-            mut_val = mut_array.max(1)
-        if change_type == 'cosine':
-            change = distance.cosine(ref_val, mut_val)
-        else:
-            change = distance.euclidean(ref_val, mut_val)
-        mut_changes[mut] = change
-    return mut_changes
-
+def kl_divergence(mat1, mat2):
+    k1 = special.kl_div(mat1, mat2)
+    k2 = special.kl_div(mat2, mat1)
+    div = ((k1 + k2)/2)
+    summed_div = div.sum()
+    return summed_div
 
 
 if __name__ == '__main__':
@@ -140,88 +54,77 @@ if __name__ == '__main__':
     print("Forward Mode is: {}".format(pc.forward_mode))
     print("L1 change is: {}".format(pc.l1_change))
 
-    folder = args.data_folder + "/attn/parent/"
-
     pc.run_experiment(include_change=True, load_previous=True, excel=False)
 
-    with open(folder+"parent_seq.pkl", 'rb') as f:
-        parent_seq = pickle.load(f)
+    if args.seq_path is not None:
+        with open(args.seq_path, 'rb') as f:
+            seq = pickle.load(f)
+        using_ref = False
+    else:
+        seq = load_ref_spike()
+        seq = str(seq.seq)
+        using_ref = True
 
+    exp_folder = args.data_folder + "/exp_settings"
+    file = open(exp_folder + "/model_folder.txt", "r")
+    model_folder = file.read()
+    file.close()
 
-    all_muts = []
+    model_path = last_biotrans_ft_path(model_folder)
 
-    for parent_id, children in pc.parent_child.items():
-        seq = pc.tree_nodes[parent_id].spike_seq
-        if seq == parent_seq:
-            for child_meta in children:
-                sig_muts = child_meta['corrected_muts']
-                mut_map = child_meta['corrected_mut_map']
-                sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in pc.ref_exp_muts]
-                all_muts.extend(sig_muts)
+    if using_ref:
+        save_path = args.save_folder+"/ref_attn_dict_l2.pkl"
+    else:
+        save_path = args.save_folder+"/parent_seq_attn_dict_l2.pkl"
 
-    all_muts = list(set(all_muts))
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    tokenizer, bio_trans_model_ft = load_biotrans_for_attn(device=device, model_path=model_path)
 
-    probabilities = pc.seq_probabilities[parent_seq]
-    changes = pc.seq_change[parent_seq]
-    seqs_mutated = mutate_seq_insilico(parent_seq)
-    seq_mutations = get_seq_mutation_dict(parent_seq, probabilities, changes, all_muts)
+    probabilities = pc.seq_probabilities[seq]
+    changes = pc.seq_change[seq]
+    seqs_mutated = mutate_seq_insilico(seq)
+
+    if using_ref:
+        muts = pc.results[(pc.results['result_type'] == 'New')]['ref_muts_str'].values.tolist()
+        all_muts = []
+        for m in muts:
+            m_lst = [x.strip() for x in m.split(';')]
+            all_muts.extend(m_lst)
+        all_muts = list(set(all_muts))
+    else:
+        all_muts = []
+        for parent_id, children in pc.parent_child.items():
+            s = pc.tree_nodes[parent_id].spike_seq
+            if s == seq:
+                for child_meta in children:
+                    sig_muts = child_meta['corrected_muts']
+                    mut_map = child_meta['corrected_mut_map']
+                    sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in pc.ref_exp_muts]
+                    all_muts.extend(sig_muts)
+        all_muts = list(set(all_muts))
+
+    seq_mutations = get_seq_mutation_dict(seq, probabilities, changes, all_muts)
     df = pd.DataFrame(seq_mutations.values())
 
-    df = df.rename(columns={'change': 'Semantic Change'})
+    seq_attn = {}
+    seqs_for_attn = [seq]
+    seq_attn = attention_change_batchs(seqs_for_attn, bio_trans_model_ft, tokenizer, device, seq_attn,
+                                            save_path=save_path, chunksize=10,
+                                            pool_heads='max', pool_layer='max', l1_norm=False)
+    mut_attn = seq_attn[seq]
 
-    with open(folder + 'parent_mean_attn.pkl', 'rb') as f:
-        ref_attn = pickle.load(f)
+    df['mut_l2_max_pooled'] = df['mutation'].map(mut_attn)
 
-    ref_mut_attn = {}
-    for file in os.listdir(folder):
-        if file == "parent_mean_attn.pkl" or file == "parent_seq.pkl":
-            continue
-        p = folder + file
-        with open(p, 'rb') as f:
-            ref_mut_attn_part = pickle.load(f)
-            ref_mut_attn.update(ref_mut_attn_part)
+    if using_ref:
+        save_path1 = args.save_folder+"/ref_attn_df1_l2.pkl"
+    else:
+        save_path1 = args.save_folder+"/parent_seq_attn_df1_l2.pkl"
 
-    del ref_mut_attn_part
-
-    l1_attn_change = calc_change(ref_array=ref_attn, mut_dict=ref_mut_attn, change_type='l1')
-
-    df["L1 Attn Change"] = df['mutation'].map(l1_attn_change)
+    df.to_pickle(save_path1)
 
 
-    l2_attn_change = calc_change(ref_array=ref_attn, mut_dict=ref_mut_attn, change_type='l2')
-
-    df["L2 Attn Change"] = df['mutation'].map(l2_attn_change)
 
 
-    cos_mean_change = calc_agg_change(ref_array=ref_attn, mut_dict=ref_mut_attn,
-                                      change_type='cosine', agg_type='mean')
-
-    df["Cos Mean Attn Change"] = df['mutation'].map(cos_mean_change)
-
-
-    cos_max_change = calc_agg_change(ref_array=ref_attn, mut_dict=ref_mut_attn,
-                                     change_type='cosine',  agg_type='max')
-
-    df["Cos Max Attn Change"] = df['mutation'].map(cos_max_change)
-
-
-    euc_mean_change = calc_agg_change(ref_array=ref_attn, mut_dict=ref_mut_attn,
-                                      change_type='euclidean', agg_type='mean')
-
-    df["Euc Mean Attn Change"] = df['mutation'].map(euc_mean_change)
-
-
-    euc_max_change = calc_agg_change(ref_array=ref_attn, mut_dict=ref_mut_attn,
-                                     change_type='euclidean', agg_type='max')
-    df["Euc MAx Attn Change"] = df['mutation'].map(euc_max_change)
-
-
-    df.to_pickle("parent_attn_df.pkl")
-
-    with open('ParentAttnDF.pkl', 'wb') as f:
-        pickle.dump(df, f)
-
-    print('Done')
 
 
 

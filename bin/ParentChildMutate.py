@@ -1,17 +1,12 @@
-import os
-import pickle
-import pandas as pd
-from datetime import datetime
+import hashlib
 from PhyloTreeParsers import Node
 from BioTransLanguageModel import *
 from MutationRankingResults import mutation_rank_results, seq_mutation_dict_results
 from tqdm import tqdm
-from biotransformers import BioTransformers
 import torch
-import ray
 from MutationHelpers import *
 import argparse
-from DataHelpers import rename_multicol_df, check_directory, combine_seq_dicts, folder_file_list
+from DataHelpers import check_directory, combine_seq_dicts, folder_file_list
 import uuid
 
 
@@ -48,8 +43,8 @@ def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
                 child_node = tree_nodes[child_id]
                 muts = child_node.node_spike_mutations
                 muts = [x for x in muts if x.find('-') == -1]
-                #muts_no_wt = [x[1:] for x in muts]
-                #muts = [x for x in muts_no_wt if x in sig_muts_no_wt]
+                # muts_no_wt = [x[1:] for x in muts]
+                # muts = [x for x in muts_no_wt if x in sig_muts_no_wt]
                 muts = [x for x in muts if x[1:] in sig_muts_no_wt]
                 if len(muts) > 0:
                     child_seq = child_node.spike_seq
@@ -280,6 +275,10 @@ class MutateParentChild(BioTransExpSettings):
         self.ref_exp_muts = []
         self.new_muts = []
         self.old_muts = []
+        # dictionary of key= parent sequence, value = list of parent IDs
+        self.seq_parents = {}
+        # dictionary of key = hash, value = parent sequence, can use with seqs_parents to get origional parent IDs
+        self.hash_seq = {}
         self.parent_child = {}
         self.seq_probabilities = {}
         self.seq_change = {}
@@ -352,7 +351,6 @@ class MutateParentChild(BioTransExpSettings):
         self.parent_child = candidates_by_mutations(self.tree_nodes, self.ref_exp_muts, drop_by_muts=True)
         self.parent_child = realign_candidates(self.parent_child, self.tree_nodes, self.ref_exp_muts, self.train_seq)
         # get the counter maps
-        # all_mut_cnt = self.mutation_data.set_index(['pos','mut']).n_times.to_dict()
         all_mut_cnt = self.mutation_data.set_index(['mutation']).n_times.to_dict()
         for parent_id, children in self.parent_child.items():
             for child_meta in children:
@@ -360,14 +358,24 @@ class MutateParentChild(BioTransExpSettings):
                 # mapped_cnt is key = significant mutation, value = frequency of reference mapped mutation
                 child_meta['mapped_cnt'] = {}
                 for aln, aln_mapped in mapped.items():
-                    # wt, pos, alt = pullout_pos_mut(aln_mapped)
-                    # cnt = all_mut_cnt[(pos, alt)]
                     cnt = all_mut_cnt[aln_mapped]
                     child_meta['mapped_cnt'][aln] = cnt
-                    # self.aln_mapped_cnt[aln] = cnt
         # sub records in for testing
         # keys = list(self.parent_child.keys())[0:10]
         # self.parent_child = {key: self.parent_child[key] for key in keys}
+        self.parent_seq_map()
+
+    def parent_seq_map(self):
+        self.seq_parents = {}
+        for parent_id, children in self.parent_child.items():
+            s = self.tree_nodes[parent_id].spike_seq
+            if s not in self.seq_parents:
+                self.seq_parents[s] = []
+            self.seq_parents[s].append(parent_id)
+        self.hash_seq = {}
+        for seq in list(self.seq_parents.keys()):
+            key = int(hashlib.sha1(seq.encode("utf-8")).hexdigest(), 16) % (10 ** 8)
+            self.hash_seq[key] = seq
 
     def get_sequences(self):
         for node_id, node in self.tree_nodes.items():
@@ -379,15 +387,16 @@ class MutateParentChild(BioTransExpSettings):
         self.seqs = list(set(self.seqs))
         print('Total Unique Parent Sequences: {}'.format(len(self.seqs)))
 
-    def sequence_language_model_values(self, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
-                                       embedding_batchsize=40, include_change=True, run_chunked_change=False,
-                                       combine=False, include_attn=False):
+    def sequence_language_model_values(self, attn_seq_batchsize=5, list_seq_batchsize=15, prob_batchsize=20,
+                                       seq_batchsize=400, embedding_batchsize=40, include_change=True,
+                                       run_chunked_change=False, combine=False, include_attn=False):
         self.get_sequences()
         if include_attn:
             print('checking saved attention changes')
             seqs_for_attn, self.seq_attn = find_previous_saved(self.seqs, self.seq_attn_path)
             if len(seqs_for_attn) > 0:
-                self.parent_attn_change_batched(list_seq_batchsize=list_seq_batchsize, combine=combine)
+                self.parent_attn_change_batched(list_seq_batchsize=list_seq_batchsize,
+                                                attn_seq_batchsize=attn_seq_batchsize, combine=combine)
 
         print('checking saved probabilities')
         seqs_for_proba, self.seq_probabilities = find_previous_saved(self.seqs, self.seq_prob_path)
@@ -426,7 +435,7 @@ class MutateParentChild(BioTransExpSettings):
                     with open(self.seq_change_path, 'wb') as a:
                         pickle.dump(self.seq_change, a)
 
-    def parent_attn_change_batched(self, list_seq_batchsize, pool_heads='max', pool_layer='max',
+    def parent_attn_change_batched(self, list_seq_batchsize, attn_seq_batchsize, pool_heads_max=True, pool_layer_max=True,
                                    l1_norm=False, combine=False):
         str_id = uuid.uuid1()
         attn_folder = self.data_folder + '/attn_changes'
@@ -444,9 +453,11 @@ class MutateParentChild(BioTransExpSettings):
             print('computing attention change for {} sequences'.format(len(seqs_for_attn)))
             device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
             tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=self.model_path)
-            self.seq_attn = attention_change_batchs(seqs_for_attn, bio_trans, tokenizer, device, self.seq_attn,
-                                                    save_path=current_save_path, chunksize=list_seq_batchsize,
-                                                    pool_heads=pool_heads, pool_layer=pool_layer, l1_norm=l1_norm)
+            self.seq_attn = attention_change_batchs(seqs=seqs_for_attn, bio_trans=bio_trans, tokenizer=tokenizer,
+                                                    device=device, seq_attn=self.seq_attn,
+                                                    save_path=current_save_path,
+                                                    seq_batchsize=attn_seq_batchsize, pool_heads_max=pool_heads_max,
+                                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
             print('Saving {} sequence attention change'.format(len(self.seq_attn)))
             with open(current_save_path, 'wb') as a:
                 pickle.dump(self.seq_attn, a)
@@ -498,90 +509,89 @@ class MutateParentChild(BioTransExpSettings):
                 pickle.dump(self.seq_change, a)
 
     def mutate_parents(self, include_change=True):
+        seq_hash = dict((v, k) for k, v in self.hash_seq.items())
         data_list = []
-        for parent_id, children in tqdm(self.parent_child.items(), desc='Unique Parent Children'):
-            parent_seq = self.tree_nodes[parent_id].spike_seq
+        for parent_seq, parent_ids in tqdm(self.seq_parents.items(), desc='Unique Parent Sequences'):
             parent_in_train = parent_seq in self.train_seq
             probabilities = self.seq_probabilities[parent_seq]
             if include_change:
                 changes = self.seq_change[parent_seq]
             else:
                 changes = None
-            for child_meta in children:
-                child_id = child_meta['child_id']
-                sig_muts = child_meta['corrected_muts']
-                result_meta = {'result_type': 'All',
-                               'threshold': 0,
-                               'parent_id': parent_id,
-                               'parent_in_train': parent_in_train,
-                               'child_id': child_id,
-                               'child_in_train': child_meta['child_in_train'],
-                               'muts_str': "; ".join(sig_muts),
-                               'tree_muts_str': '; '.join(child_meta['node_muts']),
-                               'n_gt': len(sig_muts)
-                               }
-                # run with all muts
-                seq_mutations = get_seq_mutation_dict(parent_seq, probabilities, changes, sig_muts)
+            parent_hash = seq_hash[parent_seq]
+            sig_muts = []
+            mut_map = {}
+            mapped_cnt = {}
+            for parent_id in parent_ids:
+                children = self.parent_child[parent_id]
+                for child in children:
+                    if child['child_in_train']:
+                        continue
+                    sig_muts.extend(child['corrected_muts'])
+                    mut_map.update(child['corrected_mut_map'])
+                    mapped_cnt.update(child['mapped_cnt'])
+            sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
+            sig_muts = list(set(sig_muts))
+            if len(sig_muts) < 1:
+                continue
+            ref_muts = [mut_map[x] for x in sig_muts]
+            result_meta = {'parent_hash': parent_hash,
+                           'parent_in_train': parent_in_train,
+                           'result_type': 'Combined',
+                           'threshold': np.nan,
+                           'freq': np.nan,
+                           'muts': "; ".join(sig_muts),
+                           'ref_muts': '; '.join(ref_muts),
+                           'n_gt': len(ref_muts)
+                           }
+            seq_mutations = get_seq_mutation_dict(parent_seq, probabilities, changes, sig_muts)
+            results = seq_mutation_dict_results(seq_mutations)
+            result_meta.update(results)
+            data_list.append(result_meta.copy())
+            for sig_mut in sig_muts:
+                new_sig_muts = [sig_mut]
+                ref_mut = mut_map[sig_mut]
+                freq = mapped_cnt[sig_mut]
+                result_meta['result_type'] = 'Solo Mutation'
+                result_meta['threshold'] = freq - 1
+                result_meta['freq'] = freq
+                result_meta['ref_muts'] = ref_mut
+                result_meta['muts'] = sig_mut
+                result_meta['n_gt'] = 1
+                seq_mutations = mark_significant(seq_mutations, new_sig_muts)
                 results = seq_mutation_dict_results(seq_mutations)
                 result_meta.update(results)
                 data_list.append(result_meta.copy())
-
-                # run with only new muts
-                mut_map = child_meta['corrected_mut_map']
-                sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
-                # key = sig mut, value = frequency of reference mapped mutation
-                mapped_cnt = child_meta['mapped_cnt']
-                freqs = [mapped_cnt[x] for x in sig_muts]
-                freqs = [x - 1 for x in freqs]
-                freqs = list(set(freqs))
-                freqs = sorted(freqs)
-                for threshold in freqs:
-                    new_sig_muts = [x for x in sig_muts if x in mapped_cnt and mapped_cnt[x] > threshold]
-                    new_tree_muts = [mut_map[x] for x in new_sig_muts]
-                    if len(new_sig_muts) > 0:
-                        result_meta['result_type'] = 'New'
-                        result_meta['threshold'] = threshold
-                        result_meta['n_gt'] = len(new_sig_muts)
-                        seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-                        results = seq_mutation_dict_results(seq_mutations)
-                        result_meta.update(results)
-                        result_meta['muts_str'] = "; ".join(new_sig_muts)
-                        result_meta['tree_muts_str'] = "; ".join(new_tree_muts)
-                        data_list.append(result_meta.copy())
         self.results = pd.DataFrame(data_list)
 
     def mut_summary(self):
-        self.mutation_data['n_times_str'] = self.mutation_data.n_times.astype('str')
-        freq_dict = self.mutation_data.set_index(['pos', 'mut']).n_times_str.to_dict()
-        self.mutation_data['first_date_str'] = self.mutation_data['first_date'].dt.strftime('%Y%m%d')
-        date_dict = self.mutation_data.set_index(['pos', 'mut']).first_date_str.to_dict()
-        mut_name_dict = self.mutation_data.set_index(['pos', 'mut']).mutation.to_dict()
-        self.results['ref_muts_str'] = self.results.apply(lambda x: freq_str(x, 'tree_muts_str', mut_name_dict), axis=1)
-        self.results['muts_freq'] = self.results.apply(lambda x: freq_str(x, 'tree_muts_str', freq_dict), axis=1)
-        self.results['muts_date'] = self.results.apply(lambda x: freq_str(x, 'tree_muts_str', date_dict), axis=1)
-        df = self.results[~(self.results['child_in_train'])]
-
-        groupby_col = ['result_type', 'threshold', 'ref_muts_str', 'n_gt', 'cscs_auc', 'change_auc', 'prob_auc']
-        groupby_col = [x for x in groupby_col if x in df]
-        df = df.groupby(groupby_col)['parent_id'].count().reset_index()
-        agg_cols = ['cscs_auc', 'change_auc', 'prob_auc']
-        agg_dict = {'parent_id': 'sum'}
-        agg_dict.update({x: 'mean' for x in agg_cols if x in df})
-        groupby_col = [x for x in groupby_col if x not in agg_dict]
-        df = df.groupby(groupby_col).agg(agg_dict).reset_index()
-        df['threshold'] = df['threshold'].astype(int)
+        df = self.results[(self.results['result_type'] == 'Solo Mutation')]
+        agg_dict = {'cscs_auc': ['mean', 'std'], 'change_auc': ['mean', 'std'], 'prob_auc': ['mean', 'std'],
+                    'ref_muts': 'nunique', 'parent_hash': 'count'}
+        agg_dict = {k: agg_dict[k] for k in agg_dict if k in df}
+        measures = ['cscs_auc', 'change_auc', 'prob_auc']
+        measures = [x for x in measures if x in df]
         thresholds = sorted(list(set(df['threshold'])))
-        agg_dict = {'ref_muts_str': n_unique_muts, 'parent_id': 'sum', 'n_gt': 'mean',
-                    'cscs_auc': ['mean', 'std'], 'change_auc': ['mean', 'std'], 'prob_auc': ['mean', 'std']
-                    }
-        agg_dict = {k: agg_dict[k] for k in list(agg_dict.keys()) if k in df}
         self.results_summary = pd.DataFrame()
         for threshold in thresholds:
-            df1 = df[(df['threshold'] >= threshold)].groupby('result_type').agg(agg_dict).reset_index()
-            df1 = rename_multicol_df(df1)
-            df1.insert(1, 'threshold', threshold)
-            self.results_summary = self.results_summary.append(df1)
-        print(self.results_summary)
+            df1 = pd.DataFrame(df[(df['threshold'] >= threshold)].agg(agg_dict))
+            df1[['ref_muts', 'parent_hash']] = df1[['ref_muts', 'parent_hash']].bfill()
+            df1 = df1.T
+            df2 = pd.DataFrame(df1['mean']).T.reset_index(drop=True)
+            df3 = pd.DataFrame(df1[(df1.index.isin(measures))]['std']).T.reset_index(drop=True)
+            df3.columns = [x + "_std" for x in df3.columns]
+            df2 = df2.join(df3)
+            df2.insert(0, 'threshold', threshold)
+            self.results_summary = self.results_summary.append(df2)
+        self.results_summary.rename(columns={'ref_muts': 'n_muts', 'parent_hash': 'n_parent_seq'}, inplace=True)
+        #print(self.results_summary[['threshold']+measures])
+        print("Average per Mutation")
+        avg = self.results.groupby('result_type')[measures].mean()
+        print(avg)
+        print()
+        print("Average per threshold")
+        avg1 = self.results_summary[measures].mean()
+        print(avg1)
 
     def get_savename(self, save_name=None):
         if self.finetuned:
@@ -664,6 +674,8 @@ def parse_args():
                         help='token batchsize for calculating prob')
     parser.add_argument('--seq_batchsize', type=int, default=500,
                         help='sequence list batch for embedding')
+    parser.add_argument('--attn_seq_batchsize', type=int, default=5,
+                        help='sequence list batch for Attention')
     parser.add_argument('--embedding_batchsize', type=int, default=50,
                         help='mini sequence batchsize for embedding')
     parser.add_argument('--sub_parentid_path', type=str, default=None,
@@ -695,6 +707,7 @@ if __name__ == "__main__":
     params = {'list_seq_batchsize': args.list_seq_batchsize,
               'prob_batchsize': args.prob_batchsize,
               'seq_batchsize': args.seq_batchsize,
+              'attn_seq_batchsize': args.attn_seq_batchsize,
               'embedding_batchsize': args.embedding_batchsize,
               'run_chunked_change': args.change_batched,
               'combine': args.combine}
