@@ -3,6 +3,7 @@ from scipy import special
 from BioTransLanguageModel import *
 import time
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Biotransformer Attention Experiment')
     parser.add_argument('--tree_version', type=int, help='Tree Version for models')
@@ -29,14 +30,14 @@ def parse_args():
 
 def normalize_attn_mat(attn):
     attn_sum = attn.sum()
-    norm_attn = attn/attn_sum
+    norm_attn = attn / attn_sum
     return norm_attn
 
 
 def kl_divergence(mat1, mat2):
     k1 = special.kl_div(mat1, mat2)
     k2 = special.kl_div(mat2, mat1)
-    div = ((k1 + k2)/2)
+    div = ((k1 + k2) / 2)
     summed_div = div.sum()
     return summed_div
 
@@ -58,18 +59,15 @@ if __name__ == '__main__':
 
     pc.run_experiment(include_change=True, load_previous=True, excel=False)
     '''
-    if args.seq_path is None:
-        seq_path = 'data/processed/ncbi_tree_v1/NSCS_sub_v1/attn/parent/parent_seq.pkl'
-    else:
-        seq_path = args.seq_path
 
-    seqs = []
-    ref_seq = load_ref_spike()
-    ref_seq = str(ref_seq.seq)
-    seqs.append(ref_seq)
-    with open(args.seq_path, 'rb') as f:
-        parent_seq = pickle.load(f)
-    seqs.append(parent_seq)
+    seq_path = 'data/processed/ncbi_tree_v1/NSCS_sub_v1/attn_test/parent_seqs.pkl'
+
+    seq_attn_path = 'data/processed/ncbi_tree_v1/NSCS_sub_v1/tree_v1_seq_attn_ft.pkl'
+
+    with open(seq_path, 'rb') as f:
+        seqs = pickle.load(f)
+
+    seqs_for_attn, seq_attn = find_previous_saved(seqs, seq_attn_path)
 
     exp_folder = args.data_folder + "/exp_settings"
     file = open(exp_folder + "/model_folder.txt", "r")
@@ -77,37 +75,24 @@ if __name__ == '__main__':
     file.close()
 
     model_path = last_biotrans_ft_path(model_folder)
+    pool_heads_max = True
+    pool_layer_max = True
+    l1_norm = False
 
-    save_path = args.save_folder+"/tree_v1_seq_attn_ft.pkl"
-
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
-
-    seq_attn = {}
+    print('computing attention change for {} sequences'.format(len(seqs_for_attn)))
     start = time.time()
-    seq_attn = attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_attn=seq_attn,
-                                       seq_batchsize=args.attn_seq_batchsize,
-                                       save_path=save_path, pool_heads_max=True, pool_layer_max=True,
-                                       l1_norm=False)
+
+    seq_attn = attention_change_batchs(seqs=seqs_for_attn, model_path=model_path,
+                                       seq_attn=seq_attn,
+                                       save_path=seq_attn_path,
+                                       pool_heads_max=pool_heads_max,
+                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+
     end = time.time()
     diff = end - start
-    print("Time to run 2 seqs: {}".format(diff))
+    print("Time to run {} seqs: {}".format(len(seqs_for_attn), diff))
 
     print('Saving {} sequence attention change'.format(len(seq_attn)))
-    with open(save_path, 'wb') as a:
+
+    with open(seq_attn_path, 'wb') as a:
         pickle.dump(seq_attn, a)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -156,7 +156,7 @@ def load_biotrans_for_attn(device, model_path=None):
     return tokenizer, bio_trans
 
 
-def format_attention(attention):
+def format_attention_np(attention):
     """
 
     :param attention:
@@ -172,8 +172,8 @@ def format_attention(attention):
         squeezed.append(layer_attention)
     return np.stack(squeezed)
 
-'''
-def format_attention(attention, layers=None, heads=None):
+
+def format_attention_torch(attention, layers=None, heads=None):
     """
 
     :param attention:
@@ -199,7 +199,6 @@ def format_attention(attention, layers=None, heads=None):
         squeezed.append(layer_attention)
     # num_layers x num_heads x seq_len x seq_len
     return torch.stack(squeezed)
-'''
 
 
 def get_layer_attentions_per_sample(layer_attentions):
@@ -220,7 +219,7 @@ def get_layer_attentions_per_sample(layer_attentions):
     return attn_samples
 
 
-def get_attention(seqs, tokenizer, model, device):
+def get_attention_multiple_seqs(seqs, tokenizer, model, device):
     """
 
     :param seqs:
@@ -234,16 +233,57 @@ def get_attention(seqs, tokenizer, model, device):
     :return:
     :rtype:
     """
-    separated_sequences_list = [" ".join(seq) for seq in seqs]
-    encoded_inputs = tokenizer(separated_sequences_list, return_tensors="pt",
-            padding=True).to("cpu")
-    input_seq_ids = encoded_inputs['input_ids']
-    attention = model(input_seq_ids.to(device))[-1]
-    layer_attentions = format_attention(attention)
-    #layer_attentions = layer_attentions.cpu().detach().numpy()
+    input_seq_ids = prep_sequences_for_attn(seqs=seqs, tokenizer=tokenizer)
+    with torch.no_grad():
+        attention = model(input_seq_ids.to(device))[-1]
+    # layer_attentions = format_attention_np(attention)
+    layer_attentions = format_attention_torch(attention)
+    layer_attentions = layer_attentions.cpu().detach().numpy()
     sample_attentions = get_layer_attentions_per_sample(layer_attentions)
     return sample_attentions
-    #return layer_attentions
+
+
+def prep_sequences_for_attn(seqs, tokenizer):
+    """
+
+    :param seqs:
+    :type seqs:
+    :param tokenizer:
+    :type tokenizer:
+    :return:
+    :rtype:
+    """
+    if isinstance(seqs, str):
+        seq_list = [seqs]
+    else:
+        seq_list = seqs
+    separated_sequences_list = [" ".join(seq) for seq in seq_list]
+    encoded_inputs = tokenizer(separated_sequences_list, return_tensors="pt",
+                               padding=True).to("cpu")
+    input_seq_ids = encoded_inputs['input_ids']
+    return input_seq_ids
+
+
+def get_attention(seq, tokenizer, model, device):
+    """
+
+    :param seq:
+    :type seq:
+    :param tokenizer:
+    :type tokenizer:
+    :param model:
+    :type model:
+    :param device:
+    :type device:
+    :return:
+    :rtype:
+    """
+    input_seq_ids = prep_sequences_for_attn(seqs=seq, tokenizer=tokenizer)
+    with torch.no_grad():
+        attention = model(input_seq_ids.to(device))[-1]
+    layer_attentions = format_attention_torch(attention)
+    layer_attentions = layer_attentions.cpu().detach().numpy()
+    return layer_attentions
 
 
 def pool_attention(layer_attentions, pool_heads_max=True, pool_layer_max=True):
@@ -461,22 +501,16 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
     return seq_change
 
 
-def attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_batchsize, seq_attn=None, save_path=None,
+def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
                             pool_heads_max=True, pool_layer_max=True, l1_norm=False):
     """
 
+    :param model_path: path of fine tuned checkpoint to load biotrans
+    :type model_path: str
     :param seqs: list of seqs to mutate and get attention changes
     :type seqs: list
-    :param bio_trans: biotrans model, loaded with output attentions = True
-    :type bio_trans: transformers.models.bert.modeling_bert.BertForMaskedLM
-    :param tokenizer: tokenizer for biotrans model
-    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
-    :param device: device for model loading/offloading
-    :type device: torch.device
     :param seq_attn: prior dictionary of key=seq, value = mutation attention changes
     :type seq_attn: dict
-    :param seq_batchsize: number of mutation seqs to pass through bio_trans at one time
-    :type seq_batchsize: int
     :param save_path: save path for seq_attn
     :type save_path: str
     :param pool_heads_max: if true, pool heads with max pooling
@@ -488,14 +522,15 @@ def attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_batchsize, s
     :return:
     :rtype:
     """
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
     if seq_attn is None:
         seq_attn_dict = {}
     else:
         seq_attn_dict = seq_attn
     for seq in tqdm(seqs, desc='Sequences for attention change'):
         mutations_attn = get_mutation_attention_change(seq_to_mutate=seq, bio_trans=bio_trans, tokenizer=tokenizer,
-                                                       device=device, seq_batchsize=seq_batchsize,
-                                                       pool_heads_max=pool_heads_max,
+                                                       device=device, pool_heads_max=pool_heads_max,
                                                        pool_layer_max=pool_layer_max, l1_norm=l1_norm)
         seq_attn_dict[seq] = mutations_attn
         if save_path is not None:
@@ -504,23 +539,69 @@ def attention_change_batchs(seqs, bio_trans, tokenizer, device, seq_batchsize, s
     return seq_attn_dict
 
 
-def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, seq_batchsize, pool_heads_max=True,
+def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
                                   pool_layer_max=True, l1_norm=False):
-    ref_attn = get_attention(seqs=[seq_to_mutate], tokenizer=tokenizer, model=bio_trans, device=device)
-    ref_attn = ref_attn[0]
+    ray.init()
+    ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device)
     ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
     mutation_seqs = mutate_seq_insilico(seq_to_mutate)
     mutation_seqs = {mutation_seqs[s]['mutation']: s for s in list(mutation_seqs.keys())}
-    mut_attn_changes = {}
-    chunked_mut_dict = chunk_dictionary(mutation_seqs, seq_batchsize)
-    for mut_dict in tqdm(chunked_mut_dict, desc='Mutated Sequences attentions'):
-        muts = list(mut_dict.keys())
-        mut_seqs = list(mut_dict.values())
-        mut_attns = get_attention(seqs=mut_seqs, tokenizer=tokenizer, model=bio_trans, device=device)
-        for i in range(0, len(mut_seqs)):
-            mut_attn = mut_attns[i]
-            mut = muts[i]
-            mut_attn = pool_attention(mut_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
-            attn_change = calc_array_distance(ref_attn, mut_attn, l1_norm=l1_norm)
-            mut_attn_changes[mut] = attn_change
-    return mut_attn_changes
+
+    # Set up ray actors
+    model_ref = ray.put(bio_trans)
+    n_gpu = torch.cuda.device_count()
+    actor_pool = [BertActor.remote(model=model_ref, device=device, tokenizer=tokenizer) for _ in range(n_gpu)]
+    # Parallelize the predict_attention() method over the list of mutation dictionaries
+    results = []
+    for mut, mut_seq in mutation_seqs.items():
+        actor = actor_pool.pop(0)  # Take an actor from the pool
+        results.append(actor.predict_attention.remote(mut=mut, seq=mut_seq, pool_heads_max=pool_heads_max,
+                                                      pool_layer_max=pool_layer_max))
+        actor_pool.append(actor)  # Return the actor to the pool
+
+    # Collect the results
+    result_dict = {}
+    pbar = tqdm(total=len(results))
+    while len(results) > 0:
+        done_ids, results = ray.wait(results)
+        for done_id in done_ids:
+            result_dict = process_incremental(results=result_dict, mut_attn_dict=ray.get(done_id), ref_attn=ref_attn,
+                                              l1_norm=l1_norm)
+            pbar.update(1)
+    pbar.close()
+    ray.shutdown()
+    return result_dict
+
+
+# Define a Ray actor class that wraps the model
+@ray.remote(num_cpus=5, num_gpus=1)
+class BertActor:
+    def __init__(self, model, device, tokenizer):
+        self.device = device
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def predict_attention(self, mut, seq, pool_heads_max=True, pool_layer_max=True):
+        layer_attentions = get_attention(seq=seq, tokenizer=self.tokenizer, model=self.model, device=self.device)
+        pooled_attn = pool_attention(layer_attentions, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
+        return {mut: pooled_attn}
+
+
+def process_incremental(results, mut_attn_dict, ref_attn, l1_norm):
+    """
+
+    :param l1_norm:
+    :type l1_norm:
+    :param results:
+    :type results:
+    :param mut_attn_dict:
+    :type mut_attn_dict:
+    :param ref_attn:
+    :type ref_attn:
+    :return:
+    :rtype:
+    """
+    for mut, mut_attn in mut_attn_dict.items():
+        attn_change = calc_array_distance(array1=ref_attn, array2=mut_attn, l1_norm=l1_norm)
+        results.update({mut: attn_change})
+    return results

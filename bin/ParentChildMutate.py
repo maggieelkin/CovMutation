@@ -294,13 +294,17 @@ class MutateParentChild(BioTransExpSettings):
         print('prepping parent child')
         self.prep_parent_child()
 
-    def run_experiment(self, excel=True, save_class=False, include_change=True, save_name=None,
-                       load_previous=False, subset_parentids=None, **kwargs):
+    def run_experiment(self, excel=True, save_class=False, include_change=True, include_attn=False, save_name=None,
+                       load_previous=False, subset_parentids=None, seq_values_only=False, **kwargs):
         """
         kwargs include: prob_seq_batchsize (chunksize for sequences in probabilities); prob_batchsize (batchsize for
         biotrans compute probabiltiies); seq_batchsize (batches for embdding); embedding_batchsize
         (batchsize for biotrans embedding)
 
+        :param include_attn:
+        :type include_attn:
+        :param seq_values_only:
+        :type seq_values_only:
         :param save_name: save name if loading different save base name
         :type save_name: str
         :param subset_parentids: list of parentids to subset experiment to
@@ -320,13 +324,14 @@ class MutateParentChild(BioTransExpSettings):
         """
         if subset_parentids is not None:
             self.parent_child = {k: self.parent_child[k] for k in subset_parentids}
-        self.sequence_language_model_values(include_change=include_change, **kwargs)
-        if load_previous:
-            self.load_exp_results(save_name=save_name, excel=excel)
-        else:
-            self.mutate_parents(include_change=include_change)
-            self.mut_summary()
-            self.save_data(excel=excel, save_class=save_class, save_name=save_name)
+        self.sequence_language_model_values(include_change=include_change, include_attn=include_attn, **kwargs)
+        if not seq_values_only:
+            if load_previous:
+                self.load_exp_results(save_name=save_name, excel=excel)
+            else:
+                self.mutate_parents(include_change=include_change)
+                self.mut_summary()
+                self.save_data(excel=excel, save_class=save_class, save_name=save_name)
 
     def load_exp_data(self):
         # load leaf mutt dict
@@ -395,8 +400,7 @@ class MutateParentChild(BioTransExpSettings):
             print('checking saved attention changes')
             seqs_for_attn, self.seq_attn = find_previous_saved(self.seqs, self.seq_attn_path)
             if len(seqs_for_attn) > 0:
-                self.parent_attn_change_batched(list_seq_batchsize=list_seq_batchsize,
-                                                attn_seq_batchsize=attn_seq_batchsize, combine=combine)
+                self.parent_attn_change_batched(attn_seq_batchsize=attn_seq_batchsize, combine=combine)
 
         print('checking saved probabilities')
         seqs_for_proba, self.seq_probabilities = find_previous_saved(self.seqs, self.seq_prob_path)
@@ -435,8 +439,7 @@ class MutateParentChild(BioTransExpSettings):
                     with open(self.seq_change_path, 'wb') as a:
                         pickle.dump(self.seq_change, a)
 
-    def parent_attn_change_batched(self, list_seq_batchsize, attn_seq_batchsize, pool_heads_max=True, pool_layer_max=True,
-                                   l1_norm=False, combine=False):
+    def parent_attn_change_batched(self, pool_heads_max=True, pool_layer_max=True, l1_norm=False, combine=False):
         str_id = uuid.uuid1()
         attn_folder = self.data_folder + '/attn_changes'
         check_directory(attn_folder)
@@ -451,12 +454,10 @@ class MutateParentChild(BioTransExpSettings):
                 seqs_for_attn.append(seq)
         if len(seqs_for_attn) > 0:
             print('computing attention change for {} sequences'.format(len(seqs_for_attn)))
-            device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-            tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=self.model_path)
-            self.seq_attn = attention_change_batchs(seqs=seqs_for_attn, bio_trans=bio_trans, tokenizer=tokenizer,
-                                                    device=device, seq_attn=self.seq_attn,
+            self.seq_attn = attention_change_batchs(seqs=seqs_for_attn, model_path=self.model_path,
+                                                    seq_attn=self.seq_attn,
                                                     save_path=current_save_path,
-                                                    seq_batchsize=attn_seq_batchsize, pool_heads_max=pool_heads_max,
+                                                    pool_heads_max=pool_heads_max,
                                                     pool_layer_max=pool_layer_max, l1_norm=l1_norm)
             print('Saving {} sequence attention change'.format(len(self.seq_attn)))
             with open(current_save_path, 'wb') as a:
@@ -664,6 +665,10 @@ def parse_args():
                         help='Folder for data to use in experiment')
     parser.add_argument('--include_change', action='store_true',
                         help='include change in experiment')
+    parser.add_argument('--include_attn', action='store_true',
+                        help='include attn in experiment')
+    parser.add_argument('--seq_values_only', action='store_true',
+                        help='only calculate sequence values, skips getting results')
     parser.add_argument('--change_batched', action='store_true',
                         help='batch save file changes')
     parser.add_argument('--combine', action='store_true',
@@ -674,7 +679,7 @@ def parse_args():
                         help='token batchsize for calculating prob')
     parser.add_argument('--seq_batchsize', type=int, default=500,
                         help='sequence list batch for embedding')
-    parser.add_argument('--attn_seq_batchsize', type=int, default=5,
+    parser.add_argument('--attn_seq_batchsize', type=int, default=2,
                         help='sequence list batch for Attention')
     parser.add_argument('--embedding_batchsize', type=int, default=50,
                         help='mini sequence batchsize for embedding')
@@ -713,5 +718,5 @@ if __name__ == "__main__":
               'combine': args.combine}
 
     print(params)
-    parent_child_exp.run_experiment(include_change=args.include_change, excel=False,
-                                    subset_parentids=sub_parentids, **params)
+    parent_child_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
+                                    excel=False, subset_parentids=sub_parentids, **params)
