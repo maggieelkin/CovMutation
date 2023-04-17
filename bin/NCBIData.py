@@ -622,6 +622,19 @@ def weighted_subsample_train_test(pre_cutoff_seq, size=10000, save_path='data/pr
         pickle.dump(train_test, f)
     return train_test
 
+def subset_train_seq(pre_cutoff_seq, save_path='data/processed/full_data/train_seq_subbed.pkl'):
+    print('Number precutoff prior to subsample: {}'.format(len(pre_cutoff_seq)))
+    cnt_seq = dict(Counter(pre_cutoff_seq))
+    print('Number unique precutoff prior to subsample: {}'.format(len(cnt_seq)))
+    subbed_seq = []
+    for k, v in cnt_seq.items():
+        if v > 1:
+            subbed_seq.append(k)
+    print('Number Subsampled Sequences with frequency > 1: {}'.format(len(subbed_seq)))
+    with open(save_path, 'wb') as f:
+        pickle.dump(subbed_seq, f)
+    return subbed_seq
+
 
 def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
     """
@@ -650,15 +663,18 @@ def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
     n_unique = len(set_pre_cutoff_train)
     print('getting subsampled sequences')
     train_test_dict = weighted_subsample_train_test(pre_cutoff_train, size=subsample_size, **kwargs)
-
     n_subsampled_train = len(train_test_dict['train'])
     n_subsampled_test = len(train_test_dict['test'])
 
+    train_seq_subbed = subset_train_seq(pre_cutoff_train)
+    n_train_seq_subbed = len(train_seq_subbed)
+
     message = "Cut-off:{} \nNumber Pre Cut-off Seq:{} " \
               "\nNumber Unique Training Seq:{} " \
+              "\nNumber Subbed Training Seq by frequency:{} " \
               "\nNumber Sub-sampled Training Seq:{} " \
-              "\nNumber Sub-sampled Test Seq:{} ".format(cut_off, n_seq_total, n_unique, n_subsampled_train,
-                                                         n_subsampled_test)
+              "\nNumber Sub-sampled Test Seq:{} ".format(cut_off, n_seq_total, n_unique, n_train_seq_subbed,
+                                                         n_subsampled_train, n_subsampled_test)
     print(message)
     with open('data/processed/full_data/train_seq_info.txt', 'w') as f:
         f.write(message)
