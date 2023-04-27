@@ -306,7 +306,7 @@ def mutation_rank_results(array, gt_idx, title, plot=True, **kwargs):
     return results
 
 
-def new_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn'):
+def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn'):
     """
 
     :param df:
@@ -336,7 +336,7 @@ def new_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn
 
     new_acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob)) + ss.rankdata(-attn)
     n_cscs = ranking_auc(new_acquisition, gt_idx)
-    new_cscs_auc = n_cscs['auc']
+    attn_cscs_auc = n_cscs['auc']
 
     prob = ranking_auc(prob, gt_idx)
     prob_auc = prob['auc']
@@ -349,7 +349,7 @@ def new_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn
     attn = ranking_auc(attn, gt_idx, rank_high_low=False)
     attn_auc = attn['auc']
 
-    results = {'new_cscs_auc': new_cscs_auc,
+    results = {'attn_cscs_auc': attn_cscs_auc,
                'cscs_auc': cscs_auc,
                'change_auc': change_auc,
                'prob_auc': prob_auc,
@@ -358,20 +358,24 @@ def new_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn
     return results
 
 
-def seq_mutation_dict_results(seq_mutation_dict):
+def seq_mutation_data_results(seq_data):
     """
     takes sequence mutation dictionary (from get_seq_mutation_dict) and returns AUC
     can include semantic change or exclude
     requires probability
-    :param seq_mutation_dict: dictionary of key = mut_str, value = meta
-    :type seq_mutation_dict: dict
+
+    :param seq_data: dictionary of key = mut_str, value = meta
+    :type seq_data: dict, pd.DataFrame
     :return: dictionary of auc results
     :rtype: dict
     """
-    df = pd.DataFrame(seq_mutation_dict.values())
+    if isinstance(seq_data, dict):
+        df = pd.DataFrame(seq_data.values())
+    else:
+        df = seq_data
     results = {}
     if 'change' and 'attn' in df.columns.tolist():
-        results = new_cscs(df, 'significant')
+        results = attn_cscs(df, 'significant')
     elif 'change' in df.columns.tolist():
         cscs_auc, change_auc, prob_auc = cscs(df, 'significant')
         results['cscs_auc'] = cscs_auc

@@ -1,7 +1,7 @@
 import hashlib
 from PhyloTreeParsers import Node
 from BioTransLanguageModel import *
-from MutationRankingResults import mutation_rank_results, seq_mutation_dict_results
+from MutationRankingResults import mutation_rank_results, seq_mutation_data_results
 from tqdm import tqdm
 import torch
 from MutationHelpers import *
@@ -324,12 +324,13 @@ class MutateParentChild(BioTransExpSettings):
         """
         if subset_parentids is not None:
             self.parent_child = {k: self.parent_child[k] for k in subset_parentids}
+            self.parent_seq_map()
         self.sequence_language_model_values(include_change=include_change, include_attn=include_attn, **kwargs)
         if not seq_values_only:
             if load_previous:
                 self.load_exp_results(save_name=save_name, excel=excel)
             else:
-                self.mutate_parents(include_change=include_change)
+                self.mutate_parents(include_change=include_change, include_attn=include_attn)
                 self.mut_summary()
                 self.save_data(excel=excel, save_class=save_class, save_name=save_name)
 
@@ -392,7 +393,7 @@ class MutateParentChild(BioTransExpSettings):
         self.seqs = list(set(self.seqs))
         print('Total Unique Parent Sequences: {}'.format(len(self.seqs)))
 
-    def sequence_language_model_values(self, attn_seq_batchsize=5, list_seq_batchsize=15, prob_batchsize=20,
+    def sequence_language_model_values(self, list_seq_batchsize=15, prob_batchsize=20,
                                        seq_batchsize=400, embedding_batchsize=40, include_change=True,
                                        run_chunked_change=False, combine=False, include_attn=False):
         self.get_sequences()
@@ -400,7 +401,7 @@ class MutateParentChild(BioTransExpSettings):
             print('checking saved attention changes')
             seqs_for_attn, self.seq_attn = find_previous_saved(self.seqs, self.seq_attn_path)
             if len(seqs_for_attn) > 0:
-                self.parent_attn_change_batched(attn_seq_batchsize=attn_seq_batchsize, combine=combine)
+                self.parent_attn_change_batched(combine=combine)
 
         print('checking saved probabilities')
         seqs_for_proba, self.seq_probabilities = find_previous_saved(self.seqs, self.seq_prob_path)
@@ -454,14 +455,16 @@ class MutateParentChild(BioTransExpSettings):
                 seqs_for_attn.append(seq)
         if len(seqs_for_attn) > 0:
             print('computing attention change for {} sequences'.format(len(seqs_for_attn)))
-            self.seq_attn = attention_change_batchs(seqs=seqs_for_attn, model_path=self.model_path,
-                                                    seq_attn=self.seq_attn,
-                                                    save_path=current_save_path,
-                                                    pool_heads_max=pool_heads_max,
-                                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
-            print('Saving {} sequence attention change'.format(len(self.seq_attn)))
+            current_seq_attn = {}
+            current_seq_attn = attention_change_batchs(seqs=seqs_for_attn, model_path=self.model_path,
+                                                       seq_attn=current_seq_attn,
+                                                       save_path=current_save_path,
+                                                       pool_heads_max=pool_heads_max,
+                                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+            print('Saving {} sequence attention change'.format(len(current_seq_attn)))
             with open(current_save_path, 'wb') as a:
-                pickle.dump(self.seq_attn, a)
+                pickle.dump(current_seq_attn, a)
+            self.seq_attn.update(current_seq_attn)
         if combine:
             if os.path.isfile(self.seq_attn_path):
                 attn_save_files.append(self.seq_attn_path)
@@ -509,7 +512,7 @@ class MutateParentChild(BioTransExpSettings):
             with open(self.seq_change_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
 
-    def mutate_parents(self, include_change=True):
+    def mutate_parents(self, include_change=True, include_attn=True):
         seq_hash = dict((v, k) for k, v in self.hash_seq.items())
         data_list = []
         for parent_seq, parent_ids in tqdm(self.seq_parents.items(), desc='Unique Parent Sequences'):
@@ -519,6 +522,10 @@ class MutateParentChild(BioTransExpSettings):
                 changes = self.seq_change[parent_seq]
             else:
                 changes = None
+            if include_attn:
+                attn = self.seq_attn[parent_seq]
+            else:
+                attn = None
             parent_hash = seq_hash[parent_seq]
             sig_muts = []
             mut_map = {}
@@ -545,8 +552,9 @@ class MutateParentChild(BioTransExpSettings):
                            'ref_muts': '; '.join(ref_muts),
                            'n_gt': len(ref_muts)
                            }
-            seq_mutations = get_seq_mutation_dict(parent_seq, probabilities, changes, sig_muts)
-            results = seq_mutation_dict_results(seq_mutations)
+            seq_mutations = get_seq_mutation_dict(seq=parent_seq, probabilities=probabilities, changes=changes,
+                                                  significant_mutations=sig_muts, attn=attn)
+            results = seq_mutation_data_results(seq_mutations)
             result_meta.update(results)
             data_list.append(result_meta.copy())
             for sig_mut in sig_muts:
@@ -554,23 +562,25 @@ class MutateParentChild(BioTransExpSettings):
                 ref_mut = mut_map[sig_mut]
                 freq = mapped_cnt[sig_mut]
                 result_meta['result_type'] = 'Solo Mutation'
-                result_meta['threshold'] = freq - 1
-                result_meta['freq'] = freq
+                result_meta['threshold'] = freq
+                #result_meta['freq'] = freq
                 result_meta['ref_muts'] = ref_mut
                 result_meta['muts'] = sig_mut
                 result_meta['n_gt'] = 1
                 seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-                results = seq_mutation_dict_results(seq_mutations)
+                results = seq_mutation_data_results(seq_mutations)
                 result_meta.update(results)
                 data_list.append(result_meta.copy())
         self.results = pd.DataFrame(data_list)
 
     def mut_summary(self):
         df = self.results[(self.results['result_type'] == 'Solo Mutation')]
-        agg_dict = {'cscs_auc': ['mean', 'std'], 'change_auc': ['mean', 'std'], 'prob_auc': ['mean', 'std'],
+        agg_dict = {'cscs_auc': ['mean', 'std'], 'attn_cscs_auc': ['mean', 'std'],
+                    'change_auc': ['mean', 'std'], 'prob_auc': ['mean', 'std'],
+                    'attn_auc': ['mean', 'std'],
                     'ref_muts': 'nunique', 'parent_hash': 'count'}
         agg_dict = {k: agg_dict[k] for k in agg_dict if k in df}
-        measures = ['cscs_auc', 'change_auc', 'prob_auc']
+        measures = ['cscs_auc', 'change_auc', 'prob_auc', 'attn_cscs_auc', 'attn_auc']
         measures = [x for x in measures if x in df]
         thresholds = sorted(list(set(df['threshold'])))
         self.results_summary = pd.DataFrame()
@@ -585,7 +595,7 @@ class MutateParentChild(BioTransExpSettings):
             df2.insert(0, 'threshold', threshold)
             self.results_summary = self.results_summary.append(df2)
         self.results_summary.rename(columns={'ref_muts': 'n_muts', 'parent_hash': 'n_parent_seq'}, inplace=True)
-        #print(self.results_summary[['threshold']+measures])
+        # print(self.results_summary[['threshold']+measures])
         print("Average per Mutation")
         avg = self.results.groupby('result_type')[measures].mean()
         print(avg)
@@ -712,11 +722,11 @@ if __name__ == "__main__":
     params = {'list_seq_batchsize': args.list_seq_batchsize,
               'prob_batchsize': args.prob_batchsize,
               'seq_batchsize': args.seq_batchsize,
-              'attn_seq_batchsize': args.attn_seq_batchsize,
               'embedding_batchsize': args.embedding_batchsize,
               'run_chunked_change': args.change_batched,
               'combine': args.combine}
 
     print(params)
     parent_child_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
-                                    excel=False, subset_parentids=sub_parentids, **params)
+                                    seq_values_only=args.seq_values_only, excel=False,
+                                    subset_parentids=sub_parentids, **params)

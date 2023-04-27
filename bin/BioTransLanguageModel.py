@@ -605,3 +605,21 @@ def process_incremental(results, mut_attn_dict, ref_attn, l1_norm):
         attn_change = calc_array_distance(array1=ref_attn, array2=mut_attn, l1_norm=l1_norm)
         results.update({mut: attn_change})
     return results
+
+
+def process_incremental_attn_matrix(results, attn_dict, index_seq_dict):
+    """
+
+    :param index_seq_dict:
+    :type index_seq_dict:
+    :param results:
+    :type results:
+    :param attn_dict:
+    :type attn_dict:
+    :return:
+    :rtype:
+    """
+    for index, attn in attn_dict.items():
+        seq = index_seq_dict[index]
+        results[seq] = attn
+    return results

@@ -264,9 +264,12 @@ def build_seqrecord(sequence, sequence_name=None):
     return seq_record
 
 
-def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutations=None):
+def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutations=None, attn=None):
     """
     make a dictionary of key = mutation, value = meta (with mutation, wt, pos, mut, significant, probability and change)
+
+    :param attn: dictionary of key=mutation, value = attention change
+    :type attn: dict
     :param seq: sequence to find mutations from
     :type seq: str
     :param probabilities: dictionary of probabilities from bio_trans
@@ -307,6 +310,8 @@ def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutation
             meta['prob'] = prob
             if changes is not None:
                 meta['change'] = changes[mutation]
+            if attn is not None:
+                meta['attn'] = attn[mutation]
     return seq_mutations
 
 
