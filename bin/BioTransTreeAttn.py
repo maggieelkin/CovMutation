@@ -45,10 +45,7 @@ class BioTransTreeAttn(BioTransTree):
             seqs_for_attn = self.leaf_seqs[start_idx: end_idx]
         seqs_for_attn = {k: v for k, v in enumerate(seqs_for_attn)}
         ray.init()
-        ###########################################################
-        #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        device = torch.device('cpu')
-        ###############################################################
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=self.model_path)
         model_ref = ray.put(bio_trans)
         n_gpu = torch.cuda.device_count()

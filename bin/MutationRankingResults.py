@@ -306,7 +306,7 @@ def mutation_rank_results(array, gt_idx, title, plot=True, **kwargs):
     return results
 
 
-def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn'):
+def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn', alpha=1, beta=1, gamma=1):
     """
 
     :param df:
@@ -328,13 +328,11 @@ def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='att
     df[gt_column] = df[gt_column].astype(bool)
     gt_idx = np.array(df[gt_column])
 
-    beta = 1
-
-    acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob))
+    acquisition = (alpha * ss.rankdata(-change)) + (beta * ss.rankdata(prob))
     cscs_auc = ranking_auc(acquisition, gt_idx)
     cscs_auc = cscs_auc['auc']
 
-    new_acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob)) + ss.rankdata(-attn)
+    new_acquisition = (alpha * ss.rankdata(-change)) + (beta * ss.rankdata(prob)) + (gamma * ss.rankdata(-attn))
     n_cscs = ranking_auc(new_acquisition, gt_idx)
     attn_cscs_auc = n_cscs['auc']
 
@@ -358,7 +356,7 @@ def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='att
     return results
 
 
-def seq_mutation_data_results(seq_data):
+def seq_mutation_data_results(seq_data, **kwargs):
     """
     takes sequence mutation dictionary (from get_seq_mutation_dict) and returns AUC
     can include semantic change or exclude
@@ -375,7 +373,7 @@ def seq_mutation_data_results(seq_data):
         df = seq_data
     results = {}
     if 'change' and 'attn' in df.columns.tolist():
-        results = attn_cscs(df, 'significant')
+        results = attn_cscs(df, 'significant', **kwargs)
     elif 'change' in df.columns.tolist():
         cscs_auc, change_auc, prob_auc = cscs(df, 'significant')
         results['cscs_auc'] = cscs_auc

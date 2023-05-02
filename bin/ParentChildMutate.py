@@ -470,7 +470,7 @@ class MutateParentChild(BioTransExpSettings):
                 attn_save_files.append(self.seq_attn_path)
             seq_dict = combine_seq_dicts(file_list=attn_save_files)
             self.seq_attn.update(seq_dict)
-            print('Saving {} combined sequence semantic change'.format(len(self.seq_attn)))
+            print('Saving {} combined sequence attention change'.format(len(self.seq_attn)))
             with open(self.seq_attn_path, 'wb') as a:
                 pickle.dump(self.seq_attn, a)
 
@@ -512,7 +512,7 @@ class MutateParentChild(BioTransExpSettings):
             with open(self.seq_change_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
 
-    def mutate_parents(self, include_change=True, include_attn=True):
+    def mutate_parents(self, include_change=True, include_attn=True, **ranking_values):
         seq_hash = dict((v, k) for k, v in self.hash_seq.items())
         data_list = []
         for parent_seq, parent_ids in tqdm(self.seq_parents.items(), desc='Unique Parent Sequences'):
@@ -554,7 +554,7 @@ class MutateParentChild(BioTransExpSettings):
                            }
             seq_mutations = get_seq_mutation_dict(seq=parent_seq, probabilities=probabilities, changes=changes,
                                                   significant_mutations=sig_muts, attn=attn)
-            results = seq_mutation_data_results(seq_mutations)
+            results = seq_mutation_data_results(seq_mutations, **ranking_values)
             result_meta.update(results)
             data_list.append(result_meta.copy())
             for sig_mut in sig_muts:
@@ -568,7 +568,7 @@ class MutateParentChild(BioTransExpSettings):
                 result_meta['muts'] = sig_mut
                 result_meta['n_gt'] = 1
                 seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-                results = seq_mutation_data_results(seq_mutations)
+                results = seq_mutation_data_results(seq_mutations, **ranking_values)
                 result_meta.update(results)
                 data_list.append(result_meta.copy())
         self.results = pd.DataFrame(data_list)
