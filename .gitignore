@@ -112,3 +112,5 @@ bin/archive/
 /logs/
 
 /nextstrain_scripts/
+
+/sh_bash/

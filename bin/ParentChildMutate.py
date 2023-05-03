@@ -1,9 +1,8 @@
 import hashlib
 from PhyloTreeParsers import Node
 from BioTransLanguageModel import *
-from MutationRankingResults import mutation_rank_results, seq_mutation_data_results
+from MutationRankingResults import seq_mutation_data_results
 from tqdm import tqdm
-import torch
 from MutationHelpers import *
 import argparse
 from DataHelpers import check_directory, combine_seq_dicts, folder_file_list
@@ -139,33 +138,6 @@ def mark_significant(seq_muts, sig_mut_lst):
         meta['significant'] = meta['mutation'] in sig_mut_lst
     return seq_muts
 
-
-def seq_mutated_rank_results(seq_muts, legend_title, **kwargs):
-    """
-
-    :param legend_title:
-    :type legend_title:
-    :param seq_muts:
-    :type seq_muts:
-    :param kwargs:
-    :type kwargs:
-    :return:
-    :rtype:
-    """
-    seqs = list(seq_muts.keys())
-    prob_list = []
-    gt_idx = []
-    for seq in seqs:
-        prob = seq_muts[seq]['prob']
-        prob_list.append(prob)
-        gt = seq_muts[seq]['significant']
-        gt_idx.append(gt)
-    prob_list = np.array(prob_list)
-    gt_idx = np.array(gt_idx)
-    results = mutation_rank_results(prob_list, gt_idx, title=legend_title, **kwargs)
-    result_keys = ['auc', 'mean_rank', 'max_rank', 'min_rank', 'n_gt']
-    results = {k: v for k, v in results.items() if k in result_keys}
-    return results
 
 
 def freq_str(row, mut_str_col, mut_dict):
@@ -563,7 +535,7 @@ class MutateParentChild(BioTransExpSettings):
                 freq = mapped_cnt[sig_mut]
                 result_meta['result_type'] = 'Solo Mutation'
                 result_meta['threshold'] = freq
-                #result_meta['freq'] = freq
+                # result_meta['freq'] = freq
                 result_meta['ref_muts'] = ref_mut
                 result_meta['muts'] = sig_mut
                 result_meta['n_gt'] = 1
