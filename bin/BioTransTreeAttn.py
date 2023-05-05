@@ -63,7 +63,7 @@ class BioTransTreeAttn(BioTransTree):
         while len(results) > 0:
             done_ids, results = ray.wait(results)
             for done_id in done_ids:
-                result_dict = process_incremental_attn_matrix(results=result_dict, attn_dict=ray.get(done_id),
+                result_dict = process_incremental_mean_attn(results=result_dict, attn_dict=ray.get(done_id),
                                                               index_seq_dict=seqs_for_attn)
                 pbar.update(1)
         pbar.close()

@@ -123,17 +123,19 @@ def sort_mut_list(muts):
     return sorted_muts
 
 
-def mutate_seq_insilico(seq, amino_acids=None, significant_mutations=None):
+def mutate_seq_insilico(seq, amino_acids=None, significant_mutations=None, subset_mutations=None):
     """
 
-    :param seq:
-    :type seq:
-    :param amino_acids:
-    :type amino_acids:
-    :param significant_mutations:
-    :type significant_mutations:
-    :return:
-    :rtype:
+    :param subset_mutations: list of subset mutations to include, allows to only consider some mutations
+    :type subset_mutations: list
+    :param seq: protein sequence to mutate
+    :type seq: str
+    :param amino_acids: amino acid single character tokens
+    :type amino_acids: list
+    :param significant_mutations: list of mutations that are significant
+    :type significant_mutations: list
+    :return: dictionary of key = sequence, value = meta data
+    :rtype: dict
     """
     if amino_acids is None:
         AAs = [
@@ -155,6 +157,8 @@ def mutate_seq_insilico(seq, amino_acids=None, significant_mutations=None):
             mut_seq = seq[:idx] + aa + seq[idx + 1:]
             # mutated string summarizes the mutation that was created
             mut_str = '{}{}{}'.format(seq[idx], idx + 1, aa)
+            if subset_mutations is not None and mut_str not in subset_mutations:
+                continue
             if mut_seq not in seqs_mutated:
                 meta = {
                     'mutation': mut_str
@@ -264,10 +268,13 @@ def build_seqrecord(sequence, sequence_name=None):
     return seq_record
 
 
-def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutations=None, attn=None):
+def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutations=None, attn=None,
+                          subset_mutations=None):
     """
     make a dictionary of key = mutation, value = meta (with mutation, wt, pos, mut, significant, probability and change)
 
+    :param subset_mutations: list of subset mutations to limit the seq_mutation_dict
+    :type subset_mutations: list
     :param attn: dictionary of key=mutation, value = attention change
     :type attn: dict
     :param seq: sequence to find mutations from
@@ -301,11 +308,13 @@ def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutation
             if significant_mutations is not None:
                 meta['significant'] = mut_str in significant_mutations
             seq_mutations[mut_str] = meta
+    if subset_mutations is not None:
+        seq_mutations = {k: seq_mutations[k] for k in subset_mutations}
     for pos, pos_proba in probabilities.items():
         for aa, prob in pos_proba.items():
-            if seq[pos] == aa:
-                continue
             mutation = '{}{}{}'.format(seq[pos], pos + 1, aa)
+            if mutation not in seq_mutations:
+                continue
             meta = seq_mutations[mutation]
             meta['prob'] = prob
             if changes is not None:

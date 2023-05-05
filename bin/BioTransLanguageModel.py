@@ -402,9 +402,12 @@ def calculate_sequence_embedding(seqs, bio_trans, embedding_batchsize, seq_embed
     return seq_embed_dict
 
 
-def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embedding_batchsize, l1_norm=True):
+def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embedding_batchsize, l1_norm=False,
+                                  subset_mutations=None):
     """
 
+    :param subset_mutations: list of subset mutations to include, allows to only consider some mutations
+    :type subset_mutations: list
     :param l1_norm: if true, change is based on l1_norm, does l2_norm otherwise. Default is true
     :type l1_norm: bool
     :param embedding_batchsize: batchsize to use in compute_embeddings
@@ -418,7 +421,7 @@ def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embed
     :return:
     :rtype:
     """
-    seqs_mutated = mutate_seq_insilico(seq_to_mutate)
+    seqs_mutated = mutate_seq_insilico(seq_to_mutate, subset_mutations=subset_mutations)
     ref_embedding = bio_trans.compute_embeddings([seq_to_mutate], batch_size=embedding_batchsize)
     ref_embedding = ref_embedding['full'][0]
 
@@ -465,13 +468,15 @@ def calc_array_distance(array1, array2, l1_norm=True):
 
 
 def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize, seq_change, save_path=None,
-                            chunksize=10, l1_norm=True):
+                            chunksize=10, l1_norm=False, seq_subset_mut_dict=None):
     """
     takes a list of sequences, cuts them into chunks (size of chunksize),
     each chunk undergoes get_mutation_embedding_change and gets added to seq_change dict and saved
 
-    :param l1_norm:
-    :type l1_norm:
+    :param seq_subset_mut_dict: dictionary of key = seq, value = list of subset mutations if subsetting
+    :type seq_subset_mut_dict: dict
+    :param l1_norm: if True, use L1 norm difference, L2 otherwise
+    :type l1_norm: bool
     :param save_path: if provided, save seq_change after calculating each chunk
     :type save_path: str
     :param seq_change: existing dict of key = sequence, value = mutations_change
@@ -492,8 +497,14 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
     seqs_chunked = list(chunks(seqs, chunksize))
     for seq_chunk in tqdm(seqs_chunked, desc='Chunked sequence list for semantic change'):
         for seq in tqdm(seq_chunk, desc='Sequences for semantic change'):
-            mutations_change = get_mutation_embedding_change(seq, bio_trans, seq_batchsize, embedding_batchsize,
-                                                             l1_norm)
+            if seq_subset_mut_dict is not None:
+                subset_muts = seq_subset_mut_dict[seq]
+            else:
+                subset_muts = None
+            mutations_change = get_mutation_embedding_change(seq_to_mutate=seq, bio_trans=bio_trans,
+                                                             seq_batchsize=seq_batchsize,
+                                                             embedding_batchsize=embedding_batchsize,
+                                                             l1_norm=l1_norm, subset_mutations=subset_muts)
             seq_change[seq] = mutations_change
         if save_path is not None:
             with open(save_path, 'wb') as f:
@@ -502,9 +513,11 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
 
 
 def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
-                            pool_heads_max=True, pool_layer_max=True, l1_norm=False):
+                            pool_heads_max=True, pool_layer_max=True, l1_norm=False, subset_mutations=None):
     """
 
+    :param subset_mutations: needs to be a list of lists of subset_mutations for each seq in seqs, if using a subset
+    :type subset_mutations: list
     :param model_path: path of fine tuned checkpoint to load biotrans
     :type model_path: str
     :param seqs: list of seqs to mutate and get attention changes
@@ -528,10 +541,15 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
         seq_attn_dict = {}
     else:
         seq_attn_dict = seq_attn
-    for seq in tqdm(seqs, desc='Sequences for attention change'):
+    for i, seq in enumerate(tqdm(seqs, desc='Sequences for attention change')):
+        if subset_mutations is not None:
+            subset_muts = subset_mutations[i]
+        else:
+            subset_muts = None
         mutations_attn = get_mutation_attention_change(seq_to_mutate=seq, bio_trans=bio_trans, tokenizer=tokenizer,
                                                        device=device, pool_heads_max=pool_heads_max,
-                                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+                                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm,
+                                                       subset_mutations=subset_muts)
         seq_attn_dict[seq] = mutations_attn
         if save_path is not None:
             with open(save_path, 'wb') as f:
@@ -540,11 +558,32 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
 
 
 def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
-                                  pool_layer_max=True, l1_norm=False):
+                                  pool_layer_max=True, l1_norm=False, subset_mutations=None):
+    """
+
+    :param seq_to_mutate:
+    :type seq_to_mutate:
+    :param bio_trans:
+    :type bio_trans:
+    :param tokenizer:
+    :type tokenizer:
+    :param device:
+    :type device:
+    :param pool_heads_max:
+    :type pool_heads_max:
+    :param pool_layer_max:
+    :type pool_layer_max:
+    :param l1_norm:
+    :type l1_norm:
+    :param subset_mutations:
+    :type subset_mutations:
+    :return:
+    :rtype:
+    """
     ray.init()
     ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device)
     ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
-    mutation_seqs = mutate_seq_insilico(seq_to_mutate)
+    mutation_seqs = mutate_seq_insilico(seq_to_mutate, subset_mutations=subset_mutations)
     mutation_seqs = {mutation_seqs[s]['mutation']: s for s in list(mutation_seqs.keys())}
 
     # Set up ray actors
@@ -607,7 +646,7 @@ def process_incremental(results, mut_attn_dict, ref_attn, l1_norm):
     return results
 
 
-def process_incremental_attn_matrix(results, attn_dict, index_seq_dict):
+def process_incremental_mean_attn(results, attn_dict, index_seq_dict):
     """
 
     :param index_seq_dict:
@@ -621,5 +660,6 @@ def process_incremental_attn_matrix(results, attn_dict, index_seq_dict):
     """
     for index, attn in attn_dict.items():
         seq = index_seq_dict[index]
-        results[seq] = attn
+        mean_attn = attn.mean(axis=0)
+        results[seq] = mean_attn
     return results

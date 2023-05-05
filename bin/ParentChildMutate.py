@@ -183,7 +183,7 @@ class BioTransExpSettings(object):
     """
 
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=False,
-                 cut_off='2022-1-1'):
+                 cut_off='2022-1-1', load_tree=True):
         self.cut_off = cut_off
         self.tree_version = tree_version
         self.finetuned = finetuned
@@ -202,14 +202,15 @@ class BioTransExpSettings(object):
             file.close()
         self.tree_nodes = None
         self.model_path = None
-        self.load_data()
+        self.load_data(load_tree=load_tree)
 
-    def load_data(self):
+    def load_data(self, load_tree=True):
         tree_folder = 'data/processed/ncbi_tree_v{}'.format(self.tree_version)
         # load tree_nodes
         nodes_path = tree_folder + '/tree_nodes_v{}.pkl'.format(self.tree_version)
-        with open(nodes_path, 'rb') as file:
-            self.tree_nodes = pickle.load(file)
+        if load_tree:
+            with open(nodes_path, 'rb') as file:
+                self.tree_nodes = pickle.load(file)
         if self.finetuned:
             self.model_path = last_biotrans_ft_path(self.model_folder)
             print(self.model_path)
