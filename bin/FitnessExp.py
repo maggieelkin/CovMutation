@@ -129,7 +129,7 @@ class BioTransFitness(BioTransExpSettings):
                                                     subset_mutations=subset_mutations)
             print('Saving {} sequence attention change'.format(len(self.seq_attn)))
             with open(self.seq_attn_path, 'wb') as a:
-                pickle.dump(self.seq_attn_path, a)
+                pickle.dump(self.seq_attn, a)
             print('Done with Calculating Attention')
 
 
@@ -165,9 +165,10 @@ def parse_args():
 
 
 if __name__ == "__main__":
+
     args = parse_args()
     print(args)
-
+    
     fitness_exp = BioTransFitness(tree_version=args.tree_version,
                                   finetuned=args.finetuned,
                                   forward_mode=args.masked_mode,
@@ -179,13 +180,13 @@ if __name__ == "__main__":
     print("Forward Mode is: {}".format(fitness_exp.forward_mode))
     print("L1 change is: {}".format(fitness_exp.l1_change))
 
-    #calcs = []
-    #if args.include_attn:
-    #    calcs.append('attn')
-    #if args.include_prob:
-    #    calcs.append('prob')
-    #if args.include_change:
-    #    calcs.append('change')
+    calcs = []
+    if args.include_attn:
+        calcs.append('attn')
+    if args.include_prob:
+        calcs.append('prob')
+    if args.include_change:
+        calcs.append('change')
 
     params = {'list_seq_batchsize': args.list_seq_batchsize,
               'prob_batchsize': args.prob_batchsize,
@@ -193,7 +194,9 @@ if __name__ == "__main__":
               'embedding_batchsize': args.embedding_batchsize}
 
     print(params)
-    fitness_exp.run_experiment(include_calcs=None, **params)
+    print(calcs)
+    fitness_exp.run_experiment(include_calcs=calcs, **params)
+
 
 
 

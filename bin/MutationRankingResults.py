@@ -50,6 +50,7 @@ def cscs(df, gt_column, prob_col='prob', change_col='change', plot=False, flip_c
     if flip_change_rank:
         acquisition = ss.rankdata(-change) + (beta * ss.rankdata(prob))
     else:
+        # Original Science Paper method
         acquisition = ss.rankdata(change) + (beta * ss.rankdata(prob))
     cscs_rank = ss.rankdata(-acquisition)[gt_idx]
     n_cscs = np.array([sum(cscs_rank <= i + 1) for i in range(max_consider)])
@@ -62,6 +63,7 @@ def cscs(df, gt_column, prob_col='prob', change_col='change', plot=False, flip_c
     if flip_change_rank:
         change_rank = ss.rankdata(change)[gt_idx]
     else:
+        # original science paper method
         change_rank = ss.rankdata(-change)[gt_idx]
     n_change = np.array([sum(change_rank <= i + 1) for i in range(max_consider)])
     change_auc = auc(n_consider, n_change) / norm
@@ -273,4 +275,9 @@ def seq_mutation_data_results(seq_data, **kwargs):
     else:
         df = seq_data
     results = attn_cscs(df, 'significant', **kwargs)
+    if len(kwargs) > 0:
+        results.update(kwargs)
+    else:
+        defaults = {'alpha': 1, 'beta': 1, 'gamma':1}
+        results.update(defaults)
     return results

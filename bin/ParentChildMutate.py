@@ -9,6 +9,73 @@ from DataHelpers import check_directory, combine_seq_dicts, folder_file_list
 import uuid
 
 
+def prep_exp_data(pc, include_change=True, include_attn=True):
+    """
+
+    :param pc:
+    :type pc:
+    :param include_change:
+    :type include_change:
+    :param include_attn:
+    :type include_attn:
+    :return:
+    :rtype:
+    """
+    exp_data = []
+    for parent_seq, parent_ids in pc.seq_parents.items():
+        seq_mutations, sig_muts, mut_map, mapped_cnt = pc.prep_parent_seq(parent_seq=parent_seq,
+                                                                          include_change=include_change,
+                                                                          include_attn=include_attn)
+        parent_hash = pc.seq_hash[parent_seq]
+        data = {'parent_hash': parent_hash}
+        data['seq_mutations'] = seq_mutations
+        data['sig_muts'] = sig_muts
+        data['mut_map'] = mut_map
+        data['mapped_cnt'] = mapped_cnt
+        exp_data.append(data.copy())
+    return exp_data
+
+
+def process_ranking_values(args):
+
+    exp_data, ranking_values = args
+    data_list = []
+    for exp in exp_data:
+        parent_hash = exp['parent_hash']
+        seq_mutations = exp['seq_mutations']
+        sig_muts = exp['sig_muts']
+        mut_map = exp['mut_map']
+        mapped_cnt = exp['mapped_cnt']
+        ref_muts = [mut_map[x] for x in sig_muts]
+        result_meta = {'parent_hash': parent_hash,
+                           'result_type': 'Combined',
+                           'threshold': np.nan,
+                           'freq': np.nan,
+                           'muts': "; ".join(sig_muts),
+                           'ref_muts': '; '.join(ref_muts),
+                           'n_gt': len(ref_muts)
+                           }
+        results = seq_mutation_data_results(seq_mutations, **ranking_values)
+        result_meta.update(results)
+        data_list.append(result_meta.copy())
+        for sig_mut in sig_muts:
+            new_sig_muts = [sig_mut]
+            ref_mut = mut_map[sig_mut]
+            freq = mapped_cnt[sig_mut]
+            result_meta['result_type'] = 'Solo Mutation'
+            result_meta['threshold'] = freq
+            # result_meta['freq'] = freq
+            result_meta['ref_muts'] = ref_mut
+            result_meta['muts'] = sig_mut
+            result_meta['n_gt'] = 1
+            seq_mutations = mark_significant(seq_mutations, new_sig_muts)
+            results = seq_mutation_data_results(seq_mutations, **ranking_values)
+            result_meta.update(results)
+            data_list.append(result_meta.copy())
+    results = pd.DataFrame(data_list)
+    return results
+
+
 def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
     """
 
@@ -139,7 +206,6 @@ def mark_significant(seq_muts, sig_mut_lst):
     return seq_muts
 
 
-
 def freq_str(row, mut_str_col, mut_dict):
     """
     function to take a list of mutations and return their values from the mut_dict
@@ -252,6 +318,8 @@ class MutateParentChild(BioTransExpSettings):
         self.seq_parents = {}
         # dictionary of key = hash, value = parent sequence, can use with seqs_parents to get origional parent IDs
         self.hash_seq = {}
+        # dictionary of key = sequences, hash = parent sequence, opposite of hash_seq
+        self.seq_hash = {}
         self.parent_child = {}
         self.seq_probabilities = {}
         self.seq_change = {}
@@ -268,12 +336,17 @@ class MutateParentChild(BioTransExpSettings):
         self.prep_parent_child()
 
     def run_experiment(self, excel=True, save_class=False, include_change=True, include_attn=False, save_name=None,
-                       load_previous=False, subset_parentids=None, seq_values_only=False, **kwargs):
+                       load_previous=False, subset_parentids=None, seq_values_only=False, seq_values_kwargs=None,
+                       mutate_parents_kwargs=None):
         """
-        kwargs include: prob_seq_batchsize (chunksize for sequences in probabilities); prob_batchsize (batchsize for
-        biotrans compute probabiltiies); seq_batchsize (batches for embdding); embedding_batchsize
+        seq_values_kwargs include: prob_seq_batchsize (chunksize for sequences in probabilities); prob_batchsize
+        (batchsize for biotrans compute probabiltiies); seq_batchsize (batches for embdding); embedding_batchsize
         (batchsize for biotrans embedding)
 
+        :param mutate_parents_kwargs: parameters for mutate_parents (ranking values)
+        :type mutate_parents_kwargs: dict
+        :param seq_values_kwargs: parameters to calculate sequence values
+        :type seq_values_kwargs: dict
         :param include_attn:
         :type include_attn:
         :param seq_values_only:
@@ -298,12 +371,14 @@ class MutateParentChild(BioTransExpSettings):
         if subset_parentids is not None:
             self.parent_child = {k: self.parent_child[k] for k in subset_parentids}
             self.parent_seq_map()
-        self.sequence_language_model_values(include_change=include_change, include_attn=include_attn, **kwargs)
+        self.sequence_language_model_values(include_change=include_change, include_attn=include_attn,
+                                            **(seq_values_kwargs or {}))
         if not seq_values_only:
             if load_previous:
                 self.load_exp_results(save_name=save_name, excel=excel)
             else:
-                self.mutate_parents(include_change=include_change, include_attn=include_attn)
+                self.mutate_parents(include_change=include_change, include_attn=include_attn,
+                                    **(mutate_parents_kwargs or {}))
                 self.mut_summary()
                 self.save_data(excel=excel, save_class=save_class, save_name=save_name)
 
@@ -355,6 +430,7 @@ class MutateParentChild(BioTransExpSettings):
         for seq in list(self.seq_parents.keys()):
             key = int(hashlib.sha1(seq.encode("utf-8")).hexdigest(), 16) % (10 ** 8)
             self.hash_seq[key] = seq
+        self.seq_hash = dict((v, k) for k, v in self.hash_seq.items())
 
     def get_sequences(self):
         for node_id, node in self.tree_nodes.items():
@@ -485,65 +561,80 @@ class MutateParentChild(BioTransExpSettings):
             with open(self.seq_change_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
 
-    def mutate_parents(self, include_change=True, include_attn=True, **ranking_values):
-        seq_hash = dict((v, k) for k, v in self.hash_seq.items())
+    def prep_parent_seq(self, parent_seq, include_change=True, include_attn=True):
+        parent_ids = self.seq_parents[parent_seq]
+        probabilities = self.seq_probabilities[parent_seq]
+        if include_change:
+            changes = self.seq_change[parent_seq]
+        else:
+            changes = None
+        if include_attn:
+            attn = self.seq_attn[parent_seq]
+        else:
+            attn = None
+        sig_muts = []
+        mut_map = {}
+        mapped_cnt = {}
+        for parent_id in parent_ids:
+            children = self.parent_child[parent_id]
+            for child in children:
+                if child['child_in_train']:
+                    continue
+                sig_muts.extend(child['corrected_muts'])
+                mut_map.update(child['corrected_mut_map'])
+                mapped_cnt.update(child['mapped_cnt'])
+        sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
+        sig_muts = list(set(sig_muts))
+        seq_mutations = get_seq_mutation_dict(seq=parent_seq, probabilities=probabilities, changes=changes,
+                                              significant_mutations=sig_muts, attn=attn)
+        return seq_mutations, sig_muts, mut_map, mapped_cnt
+
+    def mutate_single_parent(self, parent_seq, include_change=True, include_attn=True, **ranking_values):
         data_list = []
-        for parent_seq, parent_ids in tqdm(self.seq_parents.items(), desc='Unique Parent Sequences'):
-            parent_in_train = parent_seq in self.train_seq
-            probabilities = self.seq_probabilities[parent_seq]
-            if include_change:
-                changes = self.seq_change[parent_seq]
-            else:
-                changes = None
-            if include_attn:
-                attn = self.seq_attn[parent_seq]
-            else:
-                attn = None
-            parent_hash = seq_hash[parent_seq]
-            sig_muts = []
-            mut_map = {}
-            mapped_cnt = {}
-            for parent_id in parent_ids:
-                children = self.parent_child[parent_id]
-                for child in children:
-                    if child['child_in_train']:
-                        continue
-                    sig_muts.extend(child['corrected_muts'])
-                    mut_map.update(child['corrected_mut_map'])
-                    mapped_cnt.update(child['mapped_cnt'])
-            sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
-            sig_muts = list(set(sig_muts))
-            if len(sig_muts) < 1:
-                continue
-            ref_muts = [mut_map[x] for x in sig_muts]
-            result_meta = {'parent_hash': parent_hash,
-                           'parent_in_train': parent_in_train,
-                           'result_type': 'Combined',
-                           'threshold': np.nan,
-                           'freq': np.nan,
-                           'muts': "; ".join(sig_muts),
-                           'ref_muts': '; '.join(ref_muts),
-                           'n_gt': len(ref_muts)
-                           }
-            seq_mutations = get_seq_mutation_dict(seq=parent_seq, probabilities=probabilities, changes=changes,
-                                                  significant_mutations=sig_muts, attn=attn)
+        seq_mutations, sig_muts, mut_map, mapped_cnt = self.prep_parent_seq(parent_seq=parent_seq,
+                                                                            include_change=include_change,
+                                                                            include_attn=include_attn)
+        if len(sig_muts) < 1:
+            return data_list
+        # run with all mutations
+        parent_hash = self.seq_hash[parent_seq]
+        parent_in_train = parent_seq in self.train_seq
+        ref_muts = [mut_map[x] for x in sig_muts]
+        result_meta = {'parent_hash': parent_hash,
+                       'parent_in_train': parent_in_train,
+                       'result_type': 'Combined',
+                       'threshold': np.nan,
+                       'freq': np.nan,
+                       'muts': "; ".join(sig_muts),
+                       'ref_muts': '; '.join(ref_muts),
+                       'n_gt': len(ref_muts)
+                       }
+
+        results = seq_mutation_data_results(seq_mutations, **ranking_values)
+        result_meta.update(results)
+        data_list.append(result_meta.copy())
+        for sig_mut in sig_muts:
+            new_sig_muts = [sig_mut]
+            ref_mut = mut_map[sig_mut]
+            freq = mapped_cnt[sig_mut]
+            result_meta['result_type'] = 'Solo Mutation'
+            result_meta['threshold'] = freq
+            # result_meta['freq'] = freq
+            result_meta['ref_muts'] = ref_mut
+            result_meta['muts'] = sig_mut
+            result_meta['n_gt'] = 1
+            seq_mutations = mark_significant(seq_mutations, new_sig_muts)
             results = seq_mutation_data_results(seq_mutations, **ranking_values)
             result_meta.update(results)
             data_list.append(result_meta.copy())
-            for sig_mut in sig_muts:
-                new_sig_muts = [sig_mut]
-                ref_mut = mut_map[sig_mut]
-                freq = mapped_cnt[sig_mut]
-                result_meta['result_type'] = 'Solo Mutation'
-                result_meta['threshold'] = freq
-                # result_meta['freq'] = freq
-                result_meta['ref_muts'] = ref_mut
-                result_meta['muts'] = sig_mut
-                result_meta['n_gt'] = 1
-                seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-                results = seq_mutation_data_results(seq_mutations, **ranking_values)
-                result_meta.update(results)
-                data_list.append(result_meta.copy())
+        return data_list
+
+    def mutate_parents(self, include_change=True, include_attn=True, **ranking_values):
+        data_list = []
+        for parent_seq, parent_ids in tqdm(self.seq_parents.items(), desc='Unique Parent Sequences'):
+            parent_data_list = self.mutate_single_parent(parent_seq, include_change=include_change,
+                                                         include_attn=include_attn, **ranking_values)
+            data_list.extend(parent_data_list)
         self.results = pd.DataFrame(data_list)
 
     def mut_summary(self):
@@ -692,14 +783,14 @@ if __name__ == "__main__":
     else:
         sub_parentids = None
 
-    params = {'list_seq_batchsize': args.list_seq_batchsize,
-              'prob_batchsize': args.prob_batchsize,
-              'seq_batchsize': args.seq_batchsize,
-              'embedding_batchsize': args.embedding_batchsize,
-              'run_chunked_change': args.change_batched,
-              'combine': args.combine}
+    seq_value_params = {'list_seq_batchsize': args.list_seq_batchsize,
+                        'prob_batchsize': args.prob_batchsize,
+                        'seq_batchsize': args.seq_batchsize,
+                        'embedding_batchsize': args.embedding_batchsize,
+                        'run_chunked_change': args.change_batched,
+                        'combine': args.combine}
 
-    print(params)
+    print(seq_value_params)
     parent_child_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
                                     seq_values_only=args.seq_values_only, excel=False,
-                                    subset_parentids=sub_parentids, **params)
+                                    subset_parentids=sub_parentids, seq_values_kwargs=seq_value_params)
