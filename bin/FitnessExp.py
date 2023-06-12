@@ -1,26 +1,27 @@
+import os.path
+
 from BioTransLanguageModel import *
 from ParentChildMutate import BioTransExpSettings
 from MutationHelpers import *
 import argparse
 
 
-def build_exp_seq(ref_seq, seq_wt_sites):
-    muts_from_ref = []
-    for wt_site in seq_wt_sites:
-        wt = wt_site[0]
-        pos = wt_site[1] - 1
-        if ref_seq[pos] != wt:
-            mut = "{}{}{}".format(ref_seq[pos], pos + 1, wt)
-            muts_from_ref.append(mut)
-    seq = mutate_sequence(ref_seq, muts_from_ref)
-    return seq, muts_from_ref
+def get_rbd_pos_dict_mutations(file_path):
+    df = pd.read_csv(file_path)
+    df = df[(df['wildtype']!=df['mutation'])]
+    df = df[~(df['mutation']=='*')]
+    mutations = df['mutant'].values.tolist()
+    df['site'] = df['site'] - 1
+    df = df[['wildtype','site']].drop_duplicates()
+    rbd_pos = pd.Series(df['wildtype'].values, index=df['site']).to_dict()
+    return rbd_pos, mutations
 
 
 class BioTransFitness(BioTransExpSettings):
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, l1_change=False):
         super().__init__(tree_version, data_folder, finetuned=finetuned, forward_mode=forward_mode,
                          l1_change=l1_change, load_tree=False)
-        self.rbd_data_folder = self.data_folder + '/rbd_exp'
+        self.rbd_data_folder = self.data_folder + '/rbd_exp_omicron'
         self.rbd_data = None
         self.target_seq_meta = {}
         self.seqs = []
@@ -36,34 +37,82 @@ class BioTransFitness(BioTransExpSettings):
                                    embedding_batchsize=embedding_batchsize, pool_heads_max=pool_heads_max,
                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
 
+    def build_target_seq_meta(self):
+        self.load_data(load_tree=True)
+        strains_files = {'WT': 'bind_expr_WT.csv', 'BA.1': 'bind_expr_BA1.csv', 'BA.2': 'bind_expr_BA2.csv'}
+        ref_seq = load_ref_spike()
+        ref_seq = str(ref_seq.seq)
+        strain = 'WT'
+        path = strains_files[strain]
+        file_path = self.rbd_data_folder + '/exp_data/' + path
+        _, mutations = get_rbd_pos_dict_mutations(file_path)
+        seq_meta = {
+            'tested_muts': mutations,
+            'node_ids': ['Wuhan/Hu-1/2019']
+        }
+        self.target_seq_meta[strain] = {ref_seq: seq_meta}
+        omicron_strains = ['BA.1', 'BA.2']
+        for strain in omicron_strains:
+            path = strains_files[strain]
+            self.target_seq_meta[strain] = {}
+            file_path = self.rbd_data_folder + '/exp_data/' + path
+            rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(file_path)
+            seq_ids = {}
+            for node_id, node in self.tree_nodes.items():
+                if 'pango_lineage_local' in node.node_attrs and \
+                        node.node_attrs['pango_lineage_local'][ 'value'] == strain:
+                    muts = node.spike_mutations
+                    seq = node.spike_seq
+                    del_seq = mutate_sequence(ref_seq, muts, ignore_deletion=False)
+                    valid = True
+                    for pos, aa in rbd_pos.items():
+                        if del_seq[pos] != aa:
+                            valid = False
+                    if valid:
+                        if seq not in seq_ids:
+                            seq_ids[seq] = []
+                        seq_ids[seq].append(node_id)
+            for seq, node_ids in seq_ids.items():
+                seq_meta = {}
+                seq_meta['orig_tested_muts'] = tested_mutations
+                seq_meta['node_ids'] = node_ids
+                node = self.tree_nodes[node_ids[0]]
+                map_ref_pos = ref_seq_pos_map(ref_seq, mutations=node.spike_mutations)
+                corrected_mutations = []
+                for mut in tested_mutations:
+                    wt, pos, mutted = pullout_pos_mut(mut)
+                    seq_pos = map_ref_pos[pos]
+                    corrected_mut = "{}{}{}".format(wt, seq_pos + 1, mutted)
+                    corrected_mutations.append(corrected_mut)
+                seq_meta['tested_muts'] = corrected_mutations
+                self.target_seq_meta[strain][seq] = seq_meta
+        target_seq_meta_path = self.rbd_data_folder + "/seq_meta.pkl"
+        with open(target_seq_meta_path, 'wb') as f:
+            pickle.dump(self.target_seq_meta, f)
+
+
     def prep_data(self):
-        self.rbd_data = pd.read_csv(self.rbd_data_folder + '/rbd_dms.csv')
         self.seq_prob_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_prob_path.split('seq')[-1])
         self.seq_change_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_change_path.split('seq')[-1])
         self.seq_attn_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_attn_path.split('seq')[-1])
-        ref_seq = load_ref_spike()
-        ref_seq = str(ref_seq.seq)
-        self.rbd_data['target_name'] = self.rbd_data['target']
-        self.rbd_data['target_name'] = self.rbd_data['target_name'].replace({'N501Y': 'Alpha', 'E484K': 'Eta'})
-        targets = ['Wuhan-Hu-1', 'Alpha', 'Eta', 'Delta', 'Beta']
-        for target in targets:
-            data = self.rbd_data[(self.rbd_data['target_name'] == target)]
-            wt_sites = data[['wildtype', 'site']].drop_duplicates()[['wildtype', 'site']].values.tolist()
-            seq, muts_from_ref = build_exp_seq(ref_seq, wt_sites)
-            mut_data = data[(data['wildtype'] != data['mutant'])]
-            tested_muts = mut_data[(mut_data['ACE2 Binding'].notnull()) |
-                                   (mut_data['RBD Expression'].notnull())]['mutation'].values.tolist()
-            meta = {'sequence_name': target,
-                    'seq_muts_from_ref': muts_from_ref,
-                    'tested_muts': tested_muts
-                    }
-            self.target_seq_meta[seq] = meta
-            self.seqs = list(self.target_seq_meta.keys())
+        target_seq_meta_path = self.rbd_data_folder+"/seq_meta.pkl"
+        if os.path.isfile(target_seq_meta_path):
+            with open(target_seq_meta_path, 'rb') as f:
+                self.target_seq_meta = pickle.load(f)
+        else:
+            self.build_target_seq_meta()
+        self.seqs = []
+        for strain, seq_meta in self.target_seq_meta.items():
+            self.seqs.extend(list(seq_meta.keys()))
+        self.seqs = list(set(self.seqs))
 
     def get_subset_mutations(self, seqs):
+        full_seq_meta = {}
+        for strain, seq_meta in self.target_seq_meta.items():
+            full_seq_meta.update(seq_meta)
         subset_mutations = []
         for seq in seqs:
-            subset_muts = self.target_seq_meta[seq]['tested_muts']
+            subset_muts = full_seq_meta[seq]['tested_muts']
             subset_mutations.append(subset_muts)
         return subset_mutations
 

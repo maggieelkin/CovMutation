@@ -184,8 +184,8 @@ def attn_cscs_old(df, gt_column, prob_col='prob', change_col='change', attn_col=
 
 # ################################################################################################ #
 
-def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn', alpha=1, beta=1, gamma=1,
-              plot=False):
+def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='attn', change_rank_high_low=False,
+              alpha=1, beta=1, gamma=1, plot=False):
     """
 
     :param df:
@@ -221,7 +221,10 @@ def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='att
     if change_col in df:
         change = np.array(df[change_col])
         # flip ranking for roc_curve
-        change_rank = ss.rankdata(-change)
+        if change_rank_high_low is True:
+            change_rank = ss.rankdata(change)
+        else:
+            change_rank = ss.rankdata(-change)
         scores['change_auc'] = change_rank
     else:
         change = None
@@ -234,10 +237,14 @@ def attn_cscs(df, gt_column, prob_col='prob', change_col='change', attn_col='att
         attn = None
 
     if change is not None:
-        acquisition = (alpha * ss.rankdata(-change)) + (beta * ss.rankdata(prob))
+        if change_rank_high_low is True:
+            acquisition = (alpha * ss.rankdata(change)) + (beta * ss.rankdata(prob))
+        else:
+            acquisition = (alpha * ss.rankdata(-change)) + (beta * ss.rankdata(prob))
         acq_rank = ss.rankdata(acquisition)
         scores['cscs_auc'] = acq_rank
     if change is not None and attn is not None:
+        #TODO: Rename method with new name
         new_acquisition = (alpha * ss.rankdata(-change)) + (beta * ss.rankdata(prob)) + (gamma * ss.rankdata(-attn))
         new_acq_rank = ss.rankdata(new_acquisition)
         scores['attn_cscs_auc'] = new_acq_rank

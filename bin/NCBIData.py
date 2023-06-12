@@ -649,6 +649,7 @@ def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
     :return: nothing, just saves unique training seq and text file with size counts
     :rtype: None
     """
+    # TODO: Refractor training function to add a column in metadata_final_unique that marks in training dataset
     cut_off_datetime = datetime.strptime(cut_off, '%Y-%m-%d')
     with open('data/processed/full_data/sequences_trans_spike.pkl', 'rb') as f:
         seq_data = pickle.load(f)

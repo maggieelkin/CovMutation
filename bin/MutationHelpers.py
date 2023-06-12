@@ -268,6 +268,25 @@ def build_seqrecord(sequence, sequence_name=None):
     return seq_record
 
 
+def reformat_probabilities_dict(seq, probabilities):
+    """
+
+    :param seq:
+    :type seq:
+    :param probabilities:
+    :type probabilities:
+    :return:
+    :rtype:
+    """
+    mut_prob_dict = {}
+    for pos, pos_proba in probabilities.items():
+        for aa, prob in pos_proba.items():
+            if seq[pos] == aa:
+                continue
+            mutation = '{}{}{}'.format(seq[pos], pos + 1, aa)
+            mut_prob_dict[mutation] = prob
+    return mut_prob_dict
+
 def get_seq_mutation_dict(seq, probabilities, changes=None, significant_mutations=None, attn=None,
                           subset_mutations=None):
     """
