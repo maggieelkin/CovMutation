@@ -1,6 +1,8 @@
 import os.path
 
 from BioTransLanguageModel import *
+from DataHelpers import read_tsv_file
+from NCBIData import spike_muts_only
 from ParentChildMutate import BioTransExpSettings
 from MutationHelpers import *
 import argparse
@@ -8,13 +10,32 @@ import argparse
 
 def get_rbd_pos_dict_mutations(file_path):
     df = pd.read_csv(file_path)
-    df = df[(df['wildtype']!=df['mutation'])]
-    df = df[~(df['mutation']=='*')]
+    df = df[(df['wildtype'] != df['mutation'])]
+    df = df[~(df['mutation'] == '*')]
     mutations = df['mutant'].values.tolist()
     df['site'] = df['site'] - 1
-    df = df[['wildtype','site']].drop_duplicates()
+    df = df[['wildtype', 'site']].drop_duplicates()
     rbd_pos = pd.Series(df['wildtype'].values, index=df['site']).to_dict()
     return rbd_pos, mutations
+
+
+def chk_rbd_pos_seq(seq, rbd_pos):
+    valid = True
+    for pos, aa in rbd_pos.items():
+        if seq[pos] != aa:
+            valid = False
+    return valid
+
+
+def get_corrected_mutations(ref_seq, mutations_from_ref, mutations_to_correct):
+    map_ref_pos = ref_seq_pos_map(ref_seq, mutations=mutations_from_ref)
+    corrected_mutations = []
+    for mut in mutations_to_correct:
+        wt, pos, mutted = pullout_pos_mut(mut)
+        seq_pos = map_ref_pos[pos]
+        corrected_mut = "{}{}{}".format(wt, seq_pos + 1, mutted)
+        corrected_mutations.append(corrected_mut)
+    return corrected_mutations
 
 
 class BioTransFitness(BioTransExpSettings):
@@ -28,6 +49,13 @@ class BioTransFitness(BioTransExpSettings):
         self.seq_probabilities = {}
         self.seq_change = {}
         self.seq_attn = {}
+        self.record_dict = {}
+        self.seq_muts_from_ref = {}
+        self.clade_record_dict = {'WT': 'Wuhan/Hu-1/2019',
+                                  'BA.1': 'hCoV-19/England/LSPA-363D038/2022|EPI_ISL_10000028|2022-02-07',
+                                  'BA.2': 'hCoV-19/Scotland/QEUH-363F151/2022|EPI_ISL_10000005|2022-02-08'}
+        self.strains_files = {'WT': 'bind_expr_WT.csv', 'BA.1': 'bind_expr_BA1.csv', 'BA.2': 'bind_expr_BA2.csv'}
+
 
     def run_experiment(self, include_calcs=None, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
                        embedding_batchsize=40, pool_heads_max=True, pool_layer_max=True, l1_norm=False):
@@ -38,81 +66,70 @@ class BioTransFitness(BioTransExpSettings):
                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
 
     def build_target_seq_meta(self):
-        self.load_data(load_tree=True)
-        strains_files = {'WT': 'bind_expr_WT.csv', 'BA.1': 'bind_expr_BA1.csv', 'BA.2': 'bind_expr_BA2.csv'}
         ref_seq = load_ref_spike()
         ref_seq = str(ref_seq.seq)
+        self.target_seq_meta = {}
         strain = 'WT'
-        path = strains_files[strain]
+        path = self.strains_files[strain]
         file_path = self.rbd_data_folder + '/exp_data/' + path
-        _, mutations = get_rbd_pos_dict_mutations(file_path)
-        seq_meta = {
-            'tested_muts': mutations,
-            'node_ids': ['Wuhan/Hu-1/2019']
-        }
-        self.target_seq_meta[strain] = {ref_seq: seq_meta}
+        rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(file_path)
+        if not chk_rbd_pos_seq(ref_seq, rbd_pos):
+            raise ValueError("Sequence doesn't match RBD WT from Experiment, check {}".format(strain))
+        seq_meta = {'strain': strain, 'seq_id': self.clade_record_dict[strain], 'tested_muts': tested_mutations}
+        self.target_seq_meta[ref_seq] = seq_meta
         omicron_strains = ['BA.1', 'BA.2']
         for strain in omicron_strains:
-            path = strains_files[strain]
-            self.target_seq_meta[strain] = {}
+            path = self.strains_files[strain]
             file_path = self.rbd_data_folder + '/exp_data/' + path
             rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(file_path)
-            seq_ids = {}
-            for node_id, node in self.tree_nodes.items():
-                if 'pango_lineage_local' in node.node_attrs and \
-                        node.node_attrs['pango_lineage_local'][ 'value'] == strain:
-                    muts = node.spike_mutations
-                    seq = node.spike_seq
-                    del_seq = mutate_sequence(ref_seq, muts, ignore_deletion=False)
-                    valid = True
-                    for pos, aa in rbd_pos.items():
-                        if del_seq[pos] != aa:
-                            valid = False
-                    if valid:
-                        if seq not in seq_ids:
-                            seq_ids[seq] = []
-                        seq_ids[seq].append(node_id)
-            for seq, node_ids in seq_ids.items():
-                seq_meta = {}
-                seq_meta['orig_tested_muts'] = tested_mutations
-                seq_meta['node_ids'] = node_ids
-                node = self.tree_nodes[node_ids[0]]
-                map_ref_pos = ref_seq_pos_map(ref_seq, mutations=node.spike_mutations)
-                corrected_mutations = []
-                for mut in tested_mutations:
-                    wt, pos, mutted = pullout_pos_mut(mut)
-                    seq_pos = map_ref_pos[pos]
-                    corrected_mut = "{}{}{}".format(wt, seq_pos + 1, mutted)
-                    corrected_mutations.append(corrected_mut)
-                seq_meta['tested_muts'] = corrected_mutations
-                self.target_seq_meta[strain][seq] = seq_meta
+            record_id = self.clade_record_dict[strain]
+            seq = str(self.record_dict[record_id].seq)
+            seq = remove_end_star(seq)
+            if not chk_rbd_pos_seq(seq, rbd_pos):
+                raise ValueError("Sequence doesn't match RBD WT from Experiment, check {}".format(strain))
+            muts_from_ref = self.seq_muts_from_ref[record_id]
+            seq = seq.replace('-', '')
+            if not check_known_aa(seq):
+                raise ValueError("Sequence has unknown AA, check {}".format(strain))
+            corrected_mutations = get_corrected_mutations(ref_seq, muts_from_ref, tested_mutations)
+            seq_meta = {'strain': strain,
+                        'seq_id': record_id,
+                        'tested_muts': corrected_mutations,
+                        'orig_tested_muts': tested_mutations}
+            self.target_seq_meta[seq] = seq_meta
+
         target_seq_meta_path = self.rbd_data_folder + "/seq_meta.pkl"
         with open(target_seq_meta_path, 'wb') as f:
             pickle.dump(self.target_seq_meta, f)
+
+    def load_seq_data(self):
+        fasta_path = self.rbd_data_folder + "/nextclade_omicron_gene_S.fasta"
+        self.record_dict = SeqIO.to_dict(SeqIO.parse(fasta_path, 'fasta'))
+        df = read_tsv_file(self.rbd_data_folder + '/nextclade_omicron.tsv')
+        aa_col = ['aaSubstitutions', 'aaDeletions', 'aaInsertions']
+        for col in aa_col:
+            df[col + '_spike'] = df[col].apply(lambda x: spike_muts_only(x))
+        df['spike_mutations'] = df['aaSubstitutions_spike'] + df['aaDeletions_spike']
+        self.seq_muts_from_ref = pd.Series(df['spike_mutations'].values, index=df['seqName']).to_dict()
 
 
     def prep_data(self):
         self.seq_prob_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_prob_path.split('seq')[-1])
         self.seq_change_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_change_path.split('seq')[-1])
         self.seq_attn_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_attn_path.split('seq')[-1])
-        target_seq_meta_path = self.rbd_data_folder+"/seq_meta.pkl"
+        target_seq_meta_path = self.rbd_data_folder + "/seq_meta.pkl"
         if os.path.isfile(target_seq_meta_path):
             with open(target_seq_meta_path, 'rb') as f:
                 self.target_seq_meta = pickle.load(f)
         else:
+            self.load_seq_data()
             self.build_target_seq_meta()
-        self.seqs = []
-        for strain, seq_meta in self.target_seq_meta.items():
-            self.seqs.extend(list(seq_meta.keys()))
-        self.seqs = list(set(self.seqs))
+        self.seqs = list(self.target_seq_meta.keys())
 
     def get_subset_mutations(self, seqs):
-        full_seq_meta = {}
-        for strain, seq_meta in self.target_seq_meta.items():
-            full_seq_meta.update(seq_meta)
         subset_mutations = []
         for seq in seqs:
-            subset_muts = full_seq_meta[seq]['tested_muts']
+            subset_muts = self.target_seq_meta[seq]['tested_muts']
             subset_mutations.append(subset_muts)
         return subset_mutations
 
@@ -181,6 +198,39 @@ class BioTransFitness(BioTransExpSettings):
                 pickle.dump(self.seq_attn, a)
             print('Done with Calculating Attention')
 
+    def rbd_data_results(self):
+        self.rbd_data = pd.DataFrame()
+        for seq, meta in self.target_seq_meta.items():
+            strain = meta['strain']
+            tested_muts = meta['tested_muts']
+            if strain == 'WT':
+                orig_tested_muts = tested_muts
+            else:
+                orig_tested_muts = meta['orig_tested_muts']
+            mut_map = dict(zip(tested_muts, orig_tested_muts))
+            file_path = self.rbd_data_folder + '/exp_data/' + self.strains_files[strain]
+            data = pd.read_csv(file_path)
+            data = data[(data['wildtype'] != data['mutation'])]
+            data = data[~(data['mutation'] == '*')]
+            binding = data[(data['bind_avg'].notnull())]
+            binding = pd.Series(binding['bind_avg'].values, index=binding['mutant']).to_dict()
+            binding = {k: binding[mut_map[k]] for k in mut_map if mut_map[k] in binding}
+            expression = data[(data['expr_avg'].notnull())]
+            expression = pd.Series(expression['expr_avg'].values, index=expression['mutant']).to_dict()
+            expression = {k: expression[mut_map[k]] for k in mut_map if mut_map[k] in expression}
+            attn = self.seq_attn[seq]
+            change = self.seq_change[seq]
+            prob = self.seq_probabilities[seq]
+            seq_mutations = get_seq_mutation_dict(seq=seq, probabilities=prob, changes=change,
+                                                  significant_mutations=None, attn=attn,
+                                                  subset_mutations=tested_muts)
+            df = pd.DataFrame(seq_mutations.values())
+            df['binding'] = df['mutation'].map(binding)
+            df['expression'] = df['mutation'].map(expression)
+            df.insert(0, 'target_name', strain)
+            self.rbd_data = self.rbd_data.append(df)
+        self.rbd_data.to_pickle(self.rbd_data_folder+'/rbd_data_results.pkl')
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='RBD Fitness analysis experiment')
@@ -217,7 +267,7 @@ if __name__ == "__main__":
 
     args = parse_args()
     print(args)
-    
+
     fitness_exp = BioTransFitness(tree_version=args.tree_version,
                                   finetuned=args.finetuned,
                                   forward_mode=args.masked_mode,
@@ -245,7 +295,3 @@ if __name__ == "__main__":
     print(params)
     print(calcs)
     fitness_exp.run_experiment(include_calcs=calcs, **params)
-
-
-
-
