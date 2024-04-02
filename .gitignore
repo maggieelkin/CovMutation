@@ -119,3 +119,6 @@ bin/archive/
 *.png
 *.pkl
 *.xlsx
+
+# exclude experimental files
+exp_*
