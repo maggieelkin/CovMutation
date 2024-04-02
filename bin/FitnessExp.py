@@ -8,10 +8,10 @@ from MutationHelpers import *
 import argparse
 
 
-def get_rbd_pos_dict_mutations(file_path):
-    df = pd.read_csv(file_path)
-    df = df[(df['wildtype'] != df['mutation'])]
-    df = df[~(df['mutation'] == '*')]
+def get_rbd_pos_dict_mutations(df):
+    # df = pd.read_csv(file_path)
+    # df = df[(df['wildtype'] != df['mutation'])]
+    # df = df[~(df['mutation'] == '*')]
     mutations = df['mutant'].values.tolist()
     df['site'] = df['site'] - 1
     df = df[['wildtype', 'site']].drop_duplicates()
@@ -44,6 +44,7 @@ class BioTransFitness(BioTransExpSettings):
                          l1_change=l1_change, load_tree=False)
         self.rbd_data_folder = self.data_folder + '/rbd_exp_omicron'
         self.rbd_data = None
+        self.exp_data = None
         self.target_seq_meta = {}
         self.seqs = []
         self.seq_probabilities = {}
@@ -53,9 +54,19 @@ class BioTransFitness(BioTransExpSettings):
         self.seq_muts_from_ref = {}
         self.clade_record_dict = {'WT': 'Wuhan/Hu-1/2019',
                                   'BA.1': 'hCoV-19/England/LSPA-363D038/2022|EPI_ISL_10000028|2022-02-07',
-                                  'BA.2': 'hCoV-19/Scotland/QEUH-363F151/2022|EPI_ISL_10000005|2022-02-08'}
-        self.strains_files = {'WT': 'bind_expr_WT.csv', 'BA.1': 'bind_expr_BA1.csv', 'BA.2': 'bind_expr_BA2.csv'}
-
+                                  'BA.2': 'hCoV-19/Scotland/QEUH-363F151/2022|EPI_ISL_10000005|2022-02-08',
+                                  'BA.5': 'hCoV-19/South_Africa/CERI-KRISP-K037633/2022|EPI_ISL_11207535|2022-03-11',
+                                  'BA.2.75': 'hCoV-19/India/MH-INSACOG-CSIR-NEERI1874/2022|EPI_ISL_13302209|2022-06-07'
+                                  }
+        self.strains_files = {'WT': 'bind_expr_WT.csv',
+                              'BA.1': 'bind_expr_BA1.csv',
+                              'BA.2': 'bind_expr_BA2.csv',
+                              'BA.5': 'bind_expr_BA2.csv',
+                              'BA.2.75': 'bind_expr_BA2.csv'
+                              }
+        self.adjusted_muts = {'BA.2.75': [(339, 'H'), (446, 'S'), (460, 'K'), (493, 'Q')],
+                              'BA.5': [(452, 'R'), (486, 'V'), (493, 'Q')]
+                              }
 
     def run_experiment(self, include_calcs=None, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
                        embedding_batchsize=40, pool_heads_max=True, pool_layer_max=True, l1_norm=False):
@@ -65,23 +76,43 @@ class BioTransFitness(BioTransExpSettings):
                                    embedding_batchsize=embedding_batchsize, pool_heads_max=pool_heads_max,
                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
 
+    def prep_exp_data(self):
+        self.exp_data = pd.DataFrame()
+        for strain, file in self.strains_files.items():
+            file_path = self.rbd_data_folder + '/exp_data/' + file
+            data = pd.read_csv(file_path)
+            data = data[~(data['mutation'] == '*')]
+            if strain in self.adjusted_muts:
+                data = data.assign(bias_e=0.0, bias_b=0.0)
+                for site, mut in self.adjusted_muts[strain]:
+                    expr = data.query('site == @site and mutation == @mut')['expr_avg'].item()
+                    bind = data.query('site == @site and mutation == @mut')['bind_avg'].item()
+                    data.loc[data['site'] == site, 'bias_e'] += expr
+                    data.loc[data['site'] == site, 'bias_b'] += bind
+                    data.loc[data['site'] == site, 'wildtype'] = mut
+                data['expr_avg'] -= data['bias_e']
+                data['bind_avg'] -= data['bias_b']
+                data = data.drop(columns=['bias_e', 'bias_b'])
+                data['mutant'] = data['wildtype'] + data['site'].astype(str) + data['mutation']
+            data = data[(data['wildtype'] != data['mutation'])]
+            data.insert(0, 'target_name', strain)
+            self.exp_data = self.exp_data.append(data)
+
     def build_target_seq_meta(self):
         ref_seq = load_ref_spike()
         ref_seq = str(ref_seq.seq)
         self.target_seq_meta = {}
         strain = 'WT'
-        path = self.strains_files[strain]
-        file_path = self.rbd_data_folder + '/exp_data/' + path
-        rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(file_path)
+        data = self.exp_data[(self.exp_data['target_name'] == strain)]
+        rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(data)
         if not chk_rbd_pos_seq(ref_seq, rbd_pos):
             raise ValueError("Sequence doesn't match RBD WT from Experiment, check {}".format(strain))
         seq_meta = {'strain': strain, 'seq_id': self.clade_record_dict[strain], 'tested_muts': tested_mutations}
         self.target_seq_meta[ref_seq] = seq_meta
-        omicron_strains = ['BA.1', 'BA.2']
+        omicron_strains = ['BA.1', 'BA.2', 'BA.5', 'BA.2.75']
         for strain in omicron_strains:
-            path = self.strains_files[strain]
-            file_path = self.rbd_data_folder + '/exp_data/' + path
-            rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(file_path)
+            data = self.exp_data[(self.exp_data['target_name'] == strain)]
+            rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(data)
             record_id = self.clade_record_dict[strain]
             seq = str(self.record_dict[record_id].seq)
             seq = remove_end_star(seq)
@@ -112,12 +143,12 @@ class BioTransFitness(BioTransExpSettings):
         df['spike_mutations'] = df['aaSubstitutions_spike'] + df['aaDeletions_spike']
         self.seq_muts_from_ref = pd.Series(df['spike_mutations'].values, index=df['seqName']).to_dict()
 
-
     def prep_data(self):
         self.seq_prob_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_prob_path.split('seq')[-1])
         self.seq_change_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_change_path.split('seq')[-1])
         self.seq_attn_path = self.rbd_data_folder + "/rbd_exp{}".format(self.seq_attn_path.split('seq')[-1])
         target_seq_meta_path = self.rbd_data_folder + "/seq_meta.pkl"
+        self.prep_exp_data()
         if os.path.isfile(target_seq_meta_path):
             with open(target_seq_meta_path, 'rb') as f:
                 self.target_seq_meta = pickle.load(f)
@@ -229,7 +260,7 @@ class BioTransFitness(BioTransExpSettings):
             df['expression'] = df['mutation'].map(expression)
             df.insert(0, 'target_name', strain)
             self.rbd_data = self.rbd_data.append(df)
-        self.rbd_data.to_pickle(self.rbd_data_folder+'/rbd_data_results.pkl')
+        self.rbd_data.to_pickle(self.rbd_data_folder + '/rbd_data_results.pkl')
 
 
 def parse_args():
