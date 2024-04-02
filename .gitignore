@@ -114,3 +114,8 @@ bin/archive/
 /nextstrain_scripts/
 
 /sh_bash/
+
+# exlude data and pictures
+*.png
+*.pkl
+*.xlsx
