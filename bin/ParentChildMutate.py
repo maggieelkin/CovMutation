@@ -639,12 +639,12 @@ class MutateParentChild(BioTransExpSettings):
 
     def mut_summary(self):
         df = self.results[(self.results['result_type'] == 'Solo Mutation')]
-        agg_dict = {'cscs_auc': ['mean', 'std'], 'attn_cscs_auc': ['mean', 'std'],
+        agg_dict = {'cscs_auc': ['mean', 'std'], 'dnms_auc': ['mean', 'std'],
                     'change_auc': ['mean', 'std'], 'prob_auc': ['mean', 'std'],
                     'attn_auc': ['mean', 'std'],
                     'ref_muts': 'nunique', 'parent_hash': 'count'}
         agg_dict = {k: agg_dict[k] for k in agg_dict if k in df}
-        measures = ['cscs_auc', 'change_auc', 'prob_auc', 'attn_cscs_auc', 'attn_auc']
+        measures = ['cscs_auc', 'change_auc', 'prob_auc', 'dnms_auc', 'attn_auc']
         measures = [x for x in measures if x in df]
         thresholds = sorted(list(set(df['threshold'])))
         self.results_summary = pd.DataFrame()

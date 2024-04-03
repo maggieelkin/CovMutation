@@ -33,7 +33,7 @@ if __name__ == '__main__':
         test_seqs = list(train_test['test'])
 
     print('Number of test sequences: {}'.format(len(test_seqs)))
-    
+
     # significant mutations from dataset
     muts = {'K417E', 'K444Q', 'V445A', 'N450D', 'Y453F', 'L455F', 'E484K', 'G485D', 'F486V', 'F490L',
             'F490S', 'Q493K', 'H655Y', 'R682Q', 'R685S', 'V687G', 'G769E', 'Q779K', 'V1128A'}
@@ -78,7 +78,7 @@ if __name__ == '__main__':
     print()
     print('embeddings')
 
-    ref_embeddings = bio_trans.compute_embeddings(ref_seqs,  batch_size=40)
+    ref_embeddings = bio_trans.compute_embeddings(ref_seqs, batch_size=40)
     ref_embedding = ref_embeddings['full'][0]
     seqs = list(seqs_mutated.keys())
 
@@ -119,12 +119,8 @@ if __name__ == '__main__':
 
     print()
 
-    cscs_auc, change_auc, prob_auc = cscs(df, 'significant', plot=False, flip_change_rank=True, prob_col='masked_prob')
+    # cscs_auc, change_auc, prob_auc = cscs(df, 'significant', plot=False, flip_change_rank=True, prob_col='masked_prob')
 
-    print('CSCS AUC:' + str(cscs_auc))
-    print('Change AUC:' + str(change_auc))
-    print('Prob AUC:' + str(prob_auc))
-
-
-
-
+    # print('CSCS AUC:' + str(cscs_auc))
+    # print('Change AUC:' + str(change_auc))
+    # print('Prob AUC:' + str(prob_auc))

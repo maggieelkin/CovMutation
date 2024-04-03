@@ -61,7 +61,6 @@ if __name__ == '__main__':
     print(bio_trans.__dict__)
     print()
 
-   #chkpoint = 'logs/protbert_cv_ft_v1/version_3/checkpoints/epoch=14-step=174.ckpt'
     chkpoint = None
     print('fine tuning')
     bio_trans.finetune(train, validation_sequences=val, accelerator='ddp', logs_save_dir='logs',
