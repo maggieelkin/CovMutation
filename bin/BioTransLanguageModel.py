@@ -156,23 +156,6 @@ def load_biotrans_for_attn(device, model_path=None):
     return tokenizer, bio_trans
 
 
-def format_attention_np(attention):
-    """
-
-    :param attention:
-    :type attention:
-    :return:
-    :rtype:
-    """
-    squeezed = []
-    for layer_attention in attention:
-        layer_attention = layer_attention.cpu().detach().numpy()
-        if layer_attention.shape[0] == 1:
-            layer_attention = layer_attention.squeeze(0)
-        squeezed.append(layer_attention)
-    return np.stack(squeezed)
-
-
 def format_attention_torch(attention, layers=None, heads=None):
     """
 

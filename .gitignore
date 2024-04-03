@@ -95,7 +95,9 @@ target/
 bin/archive/
 
 # exclude data from source control by default
-/data/
+data/*
+
+!data/external/ncbi/.gitkeep
 
 # exclude external models from source control
 /src/external/

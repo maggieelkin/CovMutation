@@ -622,6 +622,7 @@ def weighted_subsample_train_test(pre_cutoff_seq, size=10000, save_path='data/pr
         pickle.dump(train_test, f)
     return train_test
 
+
 def subset_train_seq(pre_cutoff_seq, save_path='data/processed/full_data/train_seq_subbed.pkl'):
     print('Number precutoff prior to subsample: {}'.format(len(pre_cutoff_seq)))
     cnt_seq = dict(Counter(pre_cutoff_seq))
@@ -772,44 +773,9 @@ def mutation_summary_full_data(mut_save_path="data/processed/full_data/mutts.pkl
     return mut_df
 
 
-def hyphy_train_prep(cut_off='2022-1-1'):
-    """
-
-    :param cut_off:
-    :type cut_off:
-    :return:
-    :rtype:
-    """
-    df = pd.read_pickle('data/MetaData/sequences_metadata_final_unique.pkl')
-
-    df = df[(df['Collection Date'] < cut_off)]
-    df = df.reset_index(drop=True)
-    pre_cutoff_ids = df['Nucleotide Accession'].values.tolist()
-    fasta_path = 'data/raw/sequences_ncbi_final.fasta'
-    records = SeqIO.to_dict(SeqIO.parse(fasta_path, "fasta"))
-    records = {k: records[k] for k in pre_cutoff_ids}
-    records = list(records.values())
-    print('preparing {} records for hyphy'.format(len(records)))
-    df['Nucleotide Accession'] = df['Nucleotide Accession'].str.replace('.', '').str.replace('_', '')
-    df = df[['Nucleotide Accession', 'Geo Location', 'Collection Date']]
-    df.columns = ['Accession', 'Geo_Location', 'Collection_Date']
-    folder = 'data/interim/hyphy'
-    df.to_csv(folder + '/sequences.csv', index=False)
-    id_start = "epi_isl_"
-    new_records = []
-    for record in records:
-        record_id = record.id.replace('.', '').replace('_', '')
-        name = id_start + record_id
-        seq = record.seq
-        new_record = SeqRecord(seq, id=name, name=name, description=name)
-        new_records.append(new_record)
-    print('writting new records')
-    SeqIO.write(new_records, folder + "/sequences.fasta", "fasta")
-    print('done')
-
 
 if __name__ == '__main__':
-    '''
+
     print('getting full metadata')
     get_full_metadata()
 
@@ -819,7 +785,7 @@ if __name__ == '__main__':
     print('filtering sequences for quality')
     filter_sequences()
 
-    '''
+
     print('filtering sequences for nextclade QC')
     filter_nextclade_qc()
     
@@ -832,6 +798,5 @@ if __name__ == '__main__':
     print('mutation summary')
     mut_df = mutation_summary_full_data()
     
-    print('hyphy prep')
-    hyphy_train_prep()
+
 
