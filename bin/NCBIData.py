@@ -184,10 +184,10 @@ def initial_metadata_filtering(meta_data=None):
     fixes reference record
     removes records with ambiguous dates
 
-    :param meta_data:
-    :type meta_data:
-    :return:
-    :rtype:
+    :param meta_data: Full output data from get_full_metadata
+    :type meta_data: pandas.DataFrame
+    :return: filtered metadata based on date
+    :rtype: pandas.DataFrame
     """
     if meta_data is None:
         df = pd.read_pickle('data/MetaData/sequences_annot_metadata.pkl')
@@ -289,8 +289,8 @@ def filter_sequences(meta_data=None, main_folder='data/external/ncbi', remove_re
     """
     function takes the sequences list from meta_data and genomic FASTA files in main_folder and creates a fasta file
     of filtered sequence
-    :param remove_redunant:
-    :type remove_redunant:
+    :param remove_redunant: If True, remove same NT sequences per country, year, month
+    :type remove_redunant: bool
     :param meta_data: dataframe of meta data
     :type meta_data: pandas.DataFrame
     :param main_folder: folder that holds subfolders of genomic fasta files
@@ -470,11 +470,10 @@ def filter_nextclade_qc(meta_data=None, bad_ids=None):
 
 def get_final_filtered_seq(meta_data=None):
     """
+    After filtering from Nextclade QC, takes the spike sequences that passed QC and saves in processed data folder
 
-    :param meta_data:
-    :type meta_data:
-    :return:
-    :rtype:
+    :param meta_data: meta data for final filtered sequences (after nextclade QC)
+    :type meta_data: pandas.DataFrame
     """
     if meta_data is not None:
         df = meta_data

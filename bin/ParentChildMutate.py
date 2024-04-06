@@ -36,46 +36,6 @@ def prep_exp_data(pc, include_change=True, include_attn=True):
     return exp_data
 
 
-def process_ranking_values(args):
-
-    exp_data, ranking_values = args
-    data_list = []
-    for exp in exp_data:
-        parent_hash = exp['parent_hash']
-        seq_mutations = exp['seq_mutations']
-        sig_muts = exp['sig_muts']
-        mut_map = exp['mut_map']
-        mapped_cnt = exp['mapped_cnt']
-        ref_muts = [mut_map[x] for x in sig_muts]
-        result_meta = {'parent_hash': parent_hash,
-                           'result_type': 'Combined',
-                           'threshold': np.nan,
-                           'freq': np.nan,
-                           'muts': "; ".join(sig_muts),
-                           'ref_muts': '; '.join(ref_muts),
-                           'n_gt': len(ref_muts)
-                           }
-        results = seq_mutation_data_results(seq_mutations, **ranking_values)
-        result_meta.update(results)
-        data_list.append(result_meta.copy())
-        for sig_mut in sig_muts:
-            new_sig_muts = [sig_mut]
-            ref_mut = mut_map[sig_mut]
-            freq = mapped_cnt[sig_mut]
-            result_meta['result_type'] = 'Solo Mutation'
-            result_meta['threshold'] = freq
-            # result_meta['freq'] = freq
-            result_meta['ref_muts'] = ref_mut
-            result_meta['muts'] = sig_mut
-            result_meta['n_gt'] = 1
-            seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-            results = seq_mutation_data_results(seq_mutations, **ranking_values)
-            result_meta.update(results)
-            data_list.append(result_meta.copy())
-    results = pd.DataFrame(data_list)
-    return results
-
-
 def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
     """
 
@@ -363,8 +323,6 @@ class MutateParentChild(BioTransExpSettings):
         :type excel: bool
         :param save_class: if true, pickle the whole class
         :type save_class: bool
-        :param kwargs: dictionary of params for sequence_language_model_values
-        :type kwargs: dict
         :return:
         :rtype:
         """
