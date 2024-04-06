@@ -532,11 +532,9 @@ def nextstrain_meta_data_prep(df):
 
 def prep_nextstrain(meta_data=None):
     """
-
-    :param meta_data:
-    :type meta_data:
-    :return:
-    :rtype:
+    Preps data from final filtered sequences for nextstrain
+    :param meta_data: metadata output from filter_nextclade_qc
+    :type meta_data: pandas.DataFrame
     """
     if meta_data is None:
         df = pd.read_pickle('data/MetaData/sequences_metadata_final.pkl')
@@ -772,9 +770,7 @@ def mutation_summary_full_data(mut_save_path="data/processed/full_data/mutts.pkl
     return mut_df
 
 
-
 if __name__ == '__main__':
-
     print('getting full metadata')
     get_full_metadata()
 
@@ -784,18 +780,16 @@ if __name__ == '__main__':
     print('filtering sequences for quality')
     filter_sequences()
 
+    # inbetween these two steps Nextclade needs to be run and results saved in data/interim/nextclade_results
 
     print('filtering sequences for nextclade QC')
     filter_nextclade_qc()
-    
+
     print('getting full sequences training')
     full_sequences_training()
 
     print('nextstrain prep')
     prep_nextstrain()
-    
+
     print('mutation summary')
     mut_df = mutation_summary_full_data()
-    
-
-
