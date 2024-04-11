@@ -234,7 +234,7 @@ python bin/ParentChildMutate.py --tree_version 1 \
 ### Reference Experiment
 
 Running the command to calculate language model values for the parent sequences will also include the reference sequence. 
-Althought the reference sequence is excluded from results when calling `ParentChildMutate.py`
+Although the reference sequence is excluded from results when calling `ParentChildMutate.py`
 
 To only calculate language model values for the reference sequence, or to calculate results for the reference experiment:
 
