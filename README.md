@@ -22,28 +22,31 @@ You can download [data here]() and place directory under data/processed so that 
 data
 └───processed
     └───ncbi_tree_v1
-        │   tree_v1_seq_l2_change_ft.pkl
-        │   tree_v1_seq_forward_prob_ft.pkl
         │   tree_v1_seq_attn_ft.pkl
+        │   tree_v1_seq_forward_prob_ft.pkl
+        │   tree_v1_seq_l2_change_ft.pkl
         │   
+        ├───exp_settings
+        │       model_folder.txt
+        │       mutation_data.pkl
+        │       train_seq.pkl
+        │       
+        ├───results
+        │       pc_tree_v1_ft_l2_forward_mode.csv
+        │       pc_tree_v1_ft_l2_forward_mode_summary.csv
+        │       ref_tree_v1_ft_l2_forward_mode.csv
+        │       ref_tree_v1_ft_l2_forward_mode_summary.csv
+        │       
         └───treebuild
-            │   ncov_tree_v1.json
-            │   seq_metadata.csv
-            │   tree_nodes_v1.pkl
-        └───exp_settings
-            │   model_folder.txt
-            │   mutation_data.pkl
-            │   train_seq.pkl
-        └───results
-            │   pc_tree_v1_ft_l2_forward_mode.csv
-            │   pc_tree_v1_ft_l2_forward_mode_summary.csv
-            │   ref_ft_l2_forward_mode.csv
-            │   ref_ft_l2_forward_mode_summary.csv
+                ncov_tree_v1.json
+                seq_metadata.csv
+                tree_nodes_v1.pkl
+                tree_v1_info.txt
 ```
 
 ## Model
 
-You can download our fine tuned [ProtBert model here] and place under directory `logs` so that it has this file path:
+You can download our fine tuned [ProtBert model here]() and place under directory `logs` so that it has this file path:
 
 
 ```
@@ -231,7 +234,7 @@ python bin/ParentChildMutate.py --tree_version 1 \
 ### Reference Experiment
 
 Running the command to calculate language model values for the parent sequences will also include the reference sequence. 
-Althought the reference sequence is excluded from results when calling `ParentCHildMutate.py`
+Althought the reference sequence is excluded from results when calling `ParentChildMutate.py`
 
 To only calculate language model values for the reference sequence, or to calculate results for the reference experiment:
 
