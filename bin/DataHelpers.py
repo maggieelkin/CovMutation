@@ -110,8 +110,6 @@ def check_directory(path):
 
     :param path: folder path to check
     :type path: str
-    :return:
-    :rtype:
     """
     if not os.path.exists(path):
         os.makedirs(path)

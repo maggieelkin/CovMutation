@@ -4,12 +4,12 @@ see the schema : https://github.com/nextstrain/augur/blob/master/augur/data/sche
 """
 import pandas as pd
 from datetime import datetime, timedelta
-from MutationHelpers import mutate_sequence, sort_mut_list, aln_parent_child_node, pullout_pos_mut_df, \
-    node_muts_from_ref
+from MutationHelpers import mutate_sequence, sort_mut_list, aln_parent_child_node
 import json
 from Bio import SeqIO
 import pickle
 from tqdm import tqdm
+import argparse
 
 
 def has_children(node):
@@ -348,59 +348,24 @@ def get_tree_data_dict(nextstrain_path, reference_path=None):
     return tree_nodes
 
 
-def mutation_summary(tree_nodes):
-    """
-    function to get all mutations from leaf nodes in tree_nodes dictionary.
-    summarizes mutations: first date seen, n_times seen (in leafs), n_gen (from root)
-    :param tree_nodes: tree node data dictionary, key=node_id, value=Node
-    :type tree_nodes: dict
-    :return: dataframe with mutation summary
-    :rtype: pandas.Dataframe
-    """
-    mutt_dict = {}
-    for node_id, node in tree_nodes.items():
-        if node.leaf:
-            mutts = node.spike_mutations
-            for mutt in mutts:
-                if mutt not in mutt_dict:
-                    first_date = node.date
-                    n_to_root = len(node.path)
-                    mutt_dict[mutt] = {
-                        'first_date': first_date,
-                        'n_times': 1,
-                        'n_gen': n_to_root
-                    }
-                else:
-                    meta = mutt_dict[mutt]
-                    date = node.date
-                    if date < meta['first_date']:
-                        meta['first_date'] = date
-                        meta['n_gen'] = len(node.path)
-                    meta['n_times'] = meta['n_times'] + 1
-    df = pd.DataFrame.from_dict(mutt_dict).T.reset_index()
-    df.columns = ['mutation', 'first_date', 'n_times', 'n_gen']
-    df[['wt', 'pos', 'mut']] = df.apply(lambda x: pullout_pos_mut_df(x), axis=1, result_type='expand')
-    return df
-
-
-def analyze_auspice_tree(tree_version):
+def analyze_auspice_tree(nextstrain_path, tree_version):
     """
     function created edge_df, tree_nodes, mutation summary df from auspice tree tree
     saves all in subfolder under processed based on tree version
     returns objects if wanted
+
+    :param nextstrain_path: path to auspice tree from nextstrain
+    :type nextstrain_path: str
     :param tree_version: number indicating the round of sampling from nextstrain
     :type tree_version: int
     :return: edge_df, tree_nodes, mutt_df
     :rtype: tuple
     """
-    root = 'data/processed'
-    folder = root + '/ncbi_tree_v{}'.format(tree_version)
-    file = 'ncov_tree_v{}.json'.format(tree_version)
-    path = folder +'/'+ file
-    edge_df = get_tree_edges(path)
+    folder = '/'.join(nextstrain_path.split('/')[0:-1])
+    edge_df = get_tree_edges(nextstrain_path)
     edge_df.to_pickle(folder+'/tree_edges_v{}.pkl'.format(tree_version))
     n_edges = len(edge_df)
-    tree_nodes = get_tree_data_dict(path)
+    tree_nodes = get_tree_data_dict(nextstrain_path)
     with open(folder+'/tree_nodes_v{}.pkl'.format(tree_version), 'wb') as f:
         pickle.dump(tree_nodes, f)
     n_nodes = len(tree_nodes)
@@ -408,63 +373,23 @@ def analyze_auspice_tree(tree_version):
     for node_id, node in tree_nodes.items():
         if node.leaf:
             n_leaf = n_leaf + 1
-    mutt_df = mutation_summary(tree_nodes)
-    mutt_df.to_pickle(folder+'/leaf_mutts_tree_v{}.pkl'.format(tree_version))
     message = "Number Nodes:{} \nNumber Leaf:{} \nNumber Edges:{}".format(n_nodes, n_leaf, n_edges)
     with open(folder + '/tree_v{}_info.txt'.format(tree_version), 'w') as f:
         f.write(message)
-    return edge_df, tree_nodes, mutt_df
+    return edge_df, tree_nodes
 
 
-def get_training_seq(tree_version, cut_off="2022-1-1", unique=True):
-    """
-    function to get a list of training sequences from a given tree (saved in subfolder under data/processed)
-    specify a cut off and gets leaf sequences that happened prior to the cut-off
-    if unique then return only unique sequences
-    :param unique: if true return unique sequences only
-    :type unique: bool
-    :param tree_version: indicates which round sampling tree to grab
-    :type tree_version: int
-    :param cut_off: cut off date of nodes to be included in training set, format like yyyy-m-d
-    :type cut_off: str
-    :return: list of training sequences
-    :rtype: list
-    """
-    root = 'data/processed'
-    folder = root + '/ncbi_tree_v{}'.format(tree_version)
-    nodes_path = folder+'/tree_nodes_v{}.pkl'.format(tree_version)
-    with open(nodes_path, 'rb') as f:
-        tree_nodes = pickle.load(f)
-    cut_off_datetime = datetime.strptime(cut_off, '%Y-%m-%d')
-    training_seq = []
-    for node_id, node in tree_nodes.items():
-        if node.leaf:
-            date = node.date
-            if date < cut_off_datetime:
-                seq = node.spike_seq
-                training_seq.append(seq)
-    n_seq = len(training_seq)
-    unique_seq = list(set(training_seq))
-    n_unique = len(unique_seq)
-    message = "Cut-off:{} \nNumber Training Seq:{} \nNumber Unique Training Seq:{}".format(cut_off, n_seq, n_unique)
-    with open(folder + '/tree_v{}_train_seq_info.txt'.format(tree_version), 'w') as f:
-        f.write(message)
-    with open(folder+'/tree_train_full_v{}.pkl'.format(tree_version), 'wb') as f:
-        pickle.dump(training_seq, f)
-    with open(folder+'/tree_train_unique_v{}.pkl'.format(tree_version), 'wb') as f:
-        pickle.dump(unique_seq, f)
-    if unique:
-        return unique_seq
-    else:
-        return training_seq
+def parse_args():
+    parser = argparse.ArgumentParser(description='PhyloTreeParsers to process Nextstrain Output')
+    parser.add_argument('--tree_version', type=int, help='Version number for tree.')
+    parser.add_argument('--nextstrain_path', type=str, help='path to auspice tree json output from nextstrain.')
+    arguments = parser.parse_args()
+    return arguments
 
 
 if __name__ == "__main__":
-    versions = [1]
-    for version_num in versions:
-        print('Version: {}'.format(version_num))
-        print('processing auspice tree')
-        _ = analyze_auspice_tree(version_num)
-        _ = get_training_seq(version_num)
+    args = parse_args()
+
+    _ = analyze_auspice_tree(args.nextstrain_path, args.tree_version)
 
     print('done')

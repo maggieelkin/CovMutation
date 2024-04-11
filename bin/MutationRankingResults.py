@@ -110,3 +110,79 @@ def seq_mutation_data_results(seq_data, **kwargs):
         defaults = dict(alpha=1, beta=1, gamma=1)
         results.update(defaults)
     return results
+
+
+def mark_significant(seq_muts, sig_mut_lst):
+    """
+    function to take seq_mut dict (key = mutated sequence, value = meta data with probability and mutation string)
+    and re-mark what mutations are significant
+    :param seq_muts: dict (key = mutated sequence, value = meta data with probability and mutation string)
+    :type seq_muts: dict
+    :param sig_mut_lst: list of significant mutations formatted as [wt][pos+1][mut]
+    :type sig_mut_lst: lst
+    :return: dictionary with recalculated significant in meta
+    :rtype: dict
+    """
+    for seq, meta in seq_muts.items():
+        meta['significant'] = meta['mutation'] in sig_mut_lst
+    return seq_muts
+
+def results_over_thresholds(seq_mutations, sig_muts, seq_identifier, mapped_cnt, mut_map=None, parent_in_train=None,
+                            **ranking_values):
+    """
+
+    :param seq_mutations:
+    :type seq_mutations:
+    :param sig_muts:
+    :type sig_muts:
+    :param seq_identifier:
+    :type seq_identifier:
+    :param mapped_cnt:
+    :type mapped_cnt:
+    :param mut_map:
+    :type mut_map:
+    :param parent_in_train:
+    :type parent_in_train:
+    :return:
+    :rtype:
+    """
+    result_list = []
+    if mut_map is not None:
+        ref_muts = [mut_map[x] for x in sig_muts]
+    else:
+        ref_muts = sig_muts
+    result_meta = {}
+    if seq_identifier != 'ref_seq':
+        result_meta['parent_hash'] = seq_identifier
+    else:
+        result_meta['seq'] = 'ref'
+    if parent_in_train is not None:
+        result_meta['parent_in_train'] = parent_in_train
+
+    result_meta.update({
+                   'result_type': 'Combined',
+                   'threshold': np.nan,
+                   'muts': "; ".join(sig_muts),
+                   'ref_muts': '; '.join(ref_muts),
+                   'n_gt': len(ref_muts)
+                   })
+    results = seq_mutation_data_results(seq_mutations, **ranking_values)
+    result_meta.update(results)
+    result_list.append(result_meta.copy())
+    for sig_mut in sig_muts:
+        new_sig_muts = [sig_mut]
+        if mut_map is not None:
+            ref_mut = mut_map[sig_mut]
+        else:
+            ref_mut = sig_mut
+        freq = mapped_cnt[sig_mut]
+        result_meta['result_type'] = 'Solo Mutation'
+        result_meta['threshold'] = freq
+        result_meta['ref_muts'] = ref_mut
+        result_meta['muts'] = sig_mut
+        result_meta['n_gt'] = 1
+        seq_mutations = mark_significant(seq_mutations, new_sig_muts)
+        results = seq_mutation_data_results(seq_mutations, **ranking_values)
+        result_meta.update(results)
+        result_list.append(result_meta.copy())
+    return result_list

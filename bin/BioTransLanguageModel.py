@@ -86,6 +86,11 @@ def load_biotrans(model_path=None):
     :rtype:
     """
     n_gpu = torch.cuda.device_count()
+    #if n_gpu > 1:
+        # can be an issue with multi-gpu when loading bio_trans for inference
+    #    n_gpu = 1
+    if ray.is_initialized():
+        ray.shutdown()
     ray.init()
     bio_trans = BioTransformers(backend="protbert", num_gpus=n_gpu)
     if model_path is not None:
@@ -563,6 +568,9 @@ def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, p
     :return:
     :rtype:
     """
+    if ray.is_initialized():
+        ray.shutdown()
+        torch.cuda.empty_cache()
     ray.init()
     ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device)
     ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)

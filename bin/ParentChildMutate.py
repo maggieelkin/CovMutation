@@ -1,13 +1,13 @@
 import hashlib
 from PhyloTreeParsers import Node
 from BioTransLanguageModel import *
-from MutationRankingResults import seq_mutation_data_results
+from MutationRankingResults import seq_mutation_data_results, results_over_thresholds
 from tqdm import tqdm
 from MutationHelpers import *
 import argparse
 from DataHelpers import check_directory, combine_seq_dicts, folder_file_list
 import uuid
-
+import json
 
 def prep_exp_data(pc, include_change=True, include_attn=True):
     """
@@ -150,22 +150,6 @@ def realign_candidates(candidates, tree_nodes, sig_muts, train_seq=None):
     return parent_child
 
 
-def mark_significant(seq_muts, sig_mut_lst):
-    """
-    function to take seq_mut dict (key = mutated sequence, value = meta data with probability and mutation string)
-    and re-mark what mutations are significant
-    :param seq_muts: dict (key = mutated sequence, value = meta data with probability and mutation string)
-    :type seq_muts: dict
-    :param sig_mut_lst: list of significant mutations formatted as [wt][pos+1][mut]
-    :type sig_mut_lst: lst
-    :return: dictionary with recalculated significant in meta
-    :rtype: dict
-    """
-    for seq, meta in seq_muts.items():
-        meta['significant'] = meta['mutation'] in sig_mut_lst
-    return seq_muts
-
-
 def freq_str(row, mut_str_col, mut_dict):
     """
     function to take a list of mutations and return their values from the mut_dict
@@ -231,7 +215,7 @@ class BioTransExpSettings(object):
         self.load_data(load_tree=load_tree)
 
     def load_data(self, load_tree=True):
-        tree_folder = 'data/processed/ncbi_tree_v{}'.format(self.tree_version)
+        tree_folder = self.data_folder + '/treebuild'
         # load tree_nodes
         nodes_path = tree_folder + '/tree_nodes_v{}.pkl'.format(self.tree_version)
         if load_tree:
@@ -270,7 +254,7 @@ class MutateParentChild(BioTransExpSettings):
         self.train_seq = None
         self.mutation_data = None
         self.new_mutations = None
-        self.ref_results = None
+        # self.ref_results = None
         self.ref_exp_muts = []
         self.new_muts = []
         self.old_muts = []
@@ -295,7 +279,7 @@ class MutateParentChild(BioTransExpSettings):
         print('prepping parent child')
         self.prep_parent_child()
 
-    def run_experiment(self, excel=True, save_class=False, include_change=True, include_attn=False, save_name=None,
+    def run_experiment(self, csv=True, save_class=False, include_change=True, include_attn=False, save_name=None,
                        load_previous=False, subset_parentids=None, seq_values_only=False, seq_values_kwargs=None,
                        mutate_parents_kwargs=None):
         """
@@ -319,8 +303,8 @@ class MutateParentChild(BioTransExpSettings):
         :type load_previous: bool
         :param include_change: if true, calculate embedding semantic change
         :type include_change: bool
-        :param excel: if true, save data in excel format
-        :type excel: bool
+        :param csv: if true, save data in CSV format
+        :type csv: bool
         :param save_class: if true, pickle the whole class
         :type save_class: bool
         :return:
@@ -333,12 +317,12 @@ class MutateParentChild(BioTransExpSettings):
                                             **(seq_values_kwargs or {}))
         if not seq_values_only:
             if load_previous:
-                self.load_exp_results(save_name=save_name, excel=excel)
+                self.load_exp_results(save_name=save_name, excel=csv)
             else:
                 self.mutate_parents(include_change=include_change, include_attn=include_attn,
                                     **(mutate_parents_kwargs or {}))
                 self.mut_summary()
-                self.save_data(excel=excel, save_class=save_class, save_name=save_name)
+                self.save_data(csv=csv, save_class=save_class, save_name=save_name)
 
     def load_exp_data(self):
         # load leaf mutt dict
@@ -351,8 +335,8 @@ class MutateParentChild(BioTransExpSettings):
         self.old_muts = self.mutation_data[~(self.mutation_data.mutation.isin(self.new_muts))][
             'mutation'].values.tolist()
         # load reference results
-        ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
-        self.ref_results = pd.read_pickle(ref_path)
+        # ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
+        # self.ref_results = pd.read_pickle(ref_path)
         self.ref_exp_muts = self.new_mutations[(self.new_mutations['mut_type'] == 'sub')]['mutation'].values.tolist()
         # load train_seq
         train_seq_path = self.exp_folder + '/train_seq.pkl'
@@ -557,34 +541,10 @@ class MutateParentChild(BioTransExpSettings):
         # run with all mutations
         parent_hash = self.seq_hash[parent_seq]
         parent_in_train = parent_seq in self.train_seq
-        ref_muts = [mut_map[x] for x in sig_muts]
-        result_meta = {'parent_hash': parent_hash,
-                       'parent_in_train': parent_in_train,
-                       'result_type': 'Combined',
-                       'threshold': np.nan,
-                       'freq': np.nan,
-                       'muts': "; ".join(sig_muts),
-                       'ref_muts': '; '.join(ref_muts),
-                       'n_gt': len(ref_muts)
-                       }
+        data_list = results_over_thresholds(seq_mutations, sig_muts, parent_hash,
+                                            mapped_cnt=mapped_cnt, mut_map=mut_map,
+                                            parent_in_train=parent_in_train, **ranking_values)
 
-        results = seq_mutation_data_results(seq_mutations, **ranking_values)
-        result_meta.update(results)
-        data_list.append(result_meta.copy())
-        for sig_mut in sig_muts:
-            new_sig_muts = [sig_mut]
-            ref_mut = mut_map[sig_mut]
-            freq = mapped_cnt[sig_mut]
-            result_meta['result_type'] = 'Solo Mutation'
-            result_meta['threshold'] = freq
-            # result_meta['freq'] = freq
-            result_meta['ref_muts'] = ref_mut
-            result_meta['muts'] = sig_mut
-            result_meta['n_gt'] = 1
-            seq_mutations = mark_significant(seq_mutations, new_sig_muts)
-            results = seq_mutation_data_results(seq_mutations, **ranking_values)
-            result_meta.update(results)
-            data_list.append(result_meta.copy())
         return data_list
 
     def mutate_parents(self, include_change=True, include_attn=True, **ranking_values):
@@ -645,11 +605,11 @@ class MutateParentChild(BioTransExpSettings):
             base_name = 'pc_tree_v{}_{}_{}_{}_mode'.format(self.tree_version, train_str, norm, mode_str)
         return base_name
 
-    def save_data(self, excel=True, save_class=False, save_name=None):
+    def save_data(self, csv=True, save_class=False, save_name=None):
         save_folder = self.data_folder + "/results"
         base_name = self.get_savename(save_name=save_name)
         check_directory(save_folder)
-        if excel:
+        if csv:
             file_name = base_name + '.xlsx'
             summary_file_name = base_name + '_summary.xlsx'
             self.results.to_excel(save_folder + '/' + file_name)
@@ -717,6 +677,16 @@ def parse_args():
                         help='mini sequence batchsize for embedding')
     parser.add_argument('--sub_parentid_path', type=str, default=None,
                         help='if provided, load a list of parent_ids to subset the experiment to')
+    parser.add_argument('--csv',  action='store_true',
+                        help='if provided, save results in CSV format.')
+    parser.add_argument('--load_previous',  action='store_true',
+                        help='if provided, save results in CSV format.')
+    parser.add_argument('--alpha',  type=float, default=1.5,
+                        help='Semantic Change weighting value for DNMS.')
+    parser.add_argument('--beta',  type=float, default=3.0,
+                        help='Grammaticality weighting value for DNMS.')
+    parser.add_argument('--gamma',  type=float, default=1.0,
+                        help='Attention Change weighting value for DNMS.')
     arguments = parser.parse_args()
     return arguments
 
@@ -730,7 +700,7 @@ if __name__ == "__main__":
                                          forward_mode=args.masked_mode,
                                          data_folder=args.data_folder,
                                          l1_change=args.l2_norm)
-    print("masked mode arg: {}".format(args.masked_mode))
+
     print("Finetuned is: {}".format(parent_child_exp.finetuned))
     print("Forward Mode is: {}".format(parent_child_exp.forward_mode))
     print("L1 change is: {}".format(parent_child_exp.l1_change))
@@ -749,6 +719,15 @@ if __name__ == "__main__":
                         'combine': args.combine}
 
     print(seq_value_params)
+
+    mutate_params = {'alpha': args.alpha,
+                     'beta': args.beta,
+                     'gamma': args.gamma}
+
+    print(mutate_params)
+
     parent_child_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
-                                    seq_values_only=args.seq_values_only, excel=False,
-                                    subset_parentids=sub_parentids, seq_values_kwargs=seq_value_params)
+                                    seq_values_only=args.seq_values_only, csv=args.csv,
+                                    subset_parentids=sub_parentids, seq_values_kwargs=seq_value_params,
+                                    load_previous=args.load_previous, mutate_parents_kwargs=mutate_params)
+

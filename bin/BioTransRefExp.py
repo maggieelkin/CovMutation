@@ -1,3 +1,4 @@
+from DataHelpers import check_directory
 from MutationRankingResults import *
 from MutationHelpers import *
 from BioTransLanguageModel import *
@@ -6,12 +7,18 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Biotransformer Reference Experiment')
-    parser.add_argument('--log_folder', type=str, help='Folder of finetuned biotrans model')
-    parser.add_argument('--all_seqs', action='store_true',
-                        help='Set Test sequences to all')
-    parser.add_argument('--model_type', type=str, help='Type of biotransformer model', default='protbert')
-    parser.add_argument('--embed-batch', type=int, default=400,
-                        help='Embedding Combination Batch size')
+    parser.add_argument('--data_folder', type=str,
+                        help='Folder for data to use in experiment')
+    parser.add_argument('--prob_mode', type=str, default='forward',
+                        help='"masked" for masked mode, otherwise "forward" for forward mode')
+    parser.add_argument('--norm_mode', type=str, default='l2',
+                        help='"l1" for l1 norm change, otherwise "l2" for l2 norm change')
+    parser.add_argument('--save_path', type=str, default=None,
+                        help='Path to save calculated values to.')
+    parser.add_argument('--seq_batchsize', type=int, default=400,
+                        help='sequence list batch for embedding')
+    parser.add_argument('--embedding_batchsize', type=int, default=40,
+                        help='mini sequence batchsize for embedding')
     arguments = parser.parse_args()
     return arguments
 
@@ -19,108 +26,86 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
+    print(args)
+
     ref_seq = load_ref_spike()
     ref_seq = str(ref_seq.seq)
 
-    with open('data/processed/full_data/train_test_seq.pkl', 'rb') as f:
-        train_test = pickle.load(f)
+    exp_folder = args.data_folder + '/exp_settings'
+    file = open(exp_folder + "/model_folder.txt", "r")
+    model_folder = file.read()
+    file.close()
 
-    if args.all_seqs:
-        test_seqs = list(train_test['test'])
-        train_seqs = list(train_test['train'])
-        test_seqs = test_seqs + train_seqs
-    else:
-        test_seqs = list(train_test['test'])
+    mutation_data_path = exp_folder + '/mutation_data.pkl'
+    mutation_data = pd.read_pickle(mutation_data_path)
+    mutation_data = mutation_data[(mutation_data['test_set_mut'])]
+    sig_thres = pd.Series(mutation_data.n_times.values, index=mutation_data.mutation).to_dict()
+    sig_muts = list(sig_thres.keys())
 
-    print('Number of test sequences: {}'.format(len(test_seqs)))
-
-    # significant mutations from dataset
-    muts = {'K417E', 'K444Q', 'V445A', 'N450D', 'Y453F', 'L455F', 'E484K', 'G485D', 'F486V', 'F490L',
-            'F490S', 'Q493K', 'H655Y', 'R682Q', 'R685S', 'V687G', 'G769E', 'Q779K', 'V1128A'}
-
-    AAs = [
-        'A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H',
-        'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W',
-        'Y', 'V',
-    ]
-
-    seqs_mutated = mutate_seq_insilico(ref_seq, significant_mutations=muts)
+    seqs_mutated = mutate_seq_insilico(ref_seq, significant_mutations=sig_muts)
 
     ref_seqs = [str(ref_seq)]
-    log_folder = args.log_folder
-    model_path = last_biotrans_ft_path(log_folder)
+
+    model_path = last_biotrans_ft_path(model_folder)
     bio_trans = load_biotrans(model_path=model_path)
 
-    acc_after = bio_trans.compute_accuracy(ref_seqs, batch_size=10)
-    print(f"Accuracy after finetuning : {acc_after}")
-    print()
+    if args.prob_mode == 'forward':
+        print('using forward mode')
+        probabilities = bio_trans.compute_probabilities(ref_seqs, pass_mode='forward', batch_size=20)
+    else:
+        print('using masked mode')
+        probabilities = bio_trans.compute_probabilities(ref_seqs, pass_mode='masked', batch_size=20)
 
-    acc_after_test = bio_trans.compute_accuracy(test_seqs, batch_size=20)
-    print(f"Test Set Accuracy after finetuning : {acc_after_test}")
-    print()
-
-    print('getting masked probabilities')
-
-    probabilities = bio_trans.compute_probabilities(ref_seqs, pass_mode='masked', batch_size=20)
     probabilities = probabilities[0]
 
-    seqs_mutated = get_mutation_probabilities(seq=ref_seq, probabilities=probabilities, seqs_mutated_dict=seqs_mutated,
-                                              prob_col='masked_prob')
-
-    print('getting forward probabilities')
-    forward_probabilities = bio_trans.compute_probabilities(ref_seqs, pass_mode='forward', batch_size=20)
-    forward_probabilities = forward_probabilities[0]
-
-    seqs_mutated = get_mutation_probabilities(seq=ref_seq, probabilities=forward_probabilities,
-                                              seqs_mutated_dict=seqs_mutated, prob_col='prob')
+    # seqs_mutated = get_mutation_probabilities(seq=ref_seq, probabilities=probabilities, seqs_mutated_dict=seqs_mutated,
+    #                                           prob_col='prob')
 
     print('done with probabilities')
     print()
     print('embeddings')
 
-    ref_embeddings = bio_trans.compute_embeddings(ref_seqs, batch_size=40)
-    ref_embedding = ref_embeddings['full'][0]
-    seqs = list(seqs_mutated.keys())
-
-    comb_batch = args.embed_batch
-    n_batches = math.ceil(float(len(seqs)) / comb_batch)
-    print('total batches: ', str(n_batches))
-
-    for batchi in range(n_batches):
-        print('Batch #', str(batchi))
-        start = batchi * comb_batch
-        end = (batchi + 1) * comb_batch
-        subseqs = seqs[start:end]
-        seqs_embeddings = bio_trans.compute_embeddings(subseqs, batch_size=40)
-        seqs_embeddings = seqs_embeddings['full']
-        for i, embedding in enumerate(seqs_embeddings):
-            seq = subseqs[i]
-            sem_change = abs(ref_embedding - embedding).sum()
-            meta = seqs_mutated[seq]
-            meta['change'] = sem_change
-        del seqs_embeddings
+    if args.norm_mode == 'l1':
+        changes = get_mutation_embedding_change(ref_seq, bio_trans, seq_batchsize=args.seq_batchsize,
+                                                embedding_batchsize=args.embedding_batchsize, l1_norm=True)
+    else:
+        changes = get_mutation_embedding_change(ref_seq, bio_trans, seq_batchsize=args.seq_batchsize,
+                                                embedding_batchsize=args.embedding_batchsize, l1_norm=False)
 
     print('Done with embedding')
 
-    df = pd.DataFrame()
-    for seq in seqs:
-        df_row = pd.DataFrame.from_dict(seqs_mutated[seq], orient='index').T
-        df = df.append(df_row)
+    del bio_trans
 
-    df = df.reset_index(drop=True)
+    # custom bio_transformer is built to calculate attention
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
 
-    save_name = log_folder.split('/')[1]
-    save_name = '{}.pkl'.format(save_name)
+    attn = get_mutation_attention_change(seq_to_mutate=ref_seq, bio_trans=bio_trans, tokenizer=tokenizer,
+                                         device=device, pool_heads_max=True,
+                                         pool_layer_max=True, l1_norm=False)
 
-    df.to_pickle(save_name)
-    print('Done')
+    seq_mutations = get_seq_mutation_dict(seq=ref_seq, probabilities=probabilities, changes=changes,
+                                          significant_mutations=sig_muts, attn=attn)
 
-    print(df.head())
+    ranking_values = {'alpha': 1.5, 'beta': 3.0, 'gamma': 1.0}
 
-    print()
+    results = results_over_thresholds(seq_mutations, sig_muts, 'ref_seq', sig_thres, mut_map=None, parent_in_train=None,
+                                      **ranking_values)
 
-    # cscs_auc, change_auc, prob_auc = cscs(df, 'significant', plot=False, flip_change_rank=True, prob_col='masked_prob')
+    #print("Average per Mutation")
+    #measures = ['prob_auc', 'change_auc', 'attn_auc', 'cscs_auc', 'dnms_auc']
+    #avg = round(results.groupby('result_type')[measures].mean(), 4)
+    #print(avg)
+    #print()
 
-    # print('CSCS AUC:' + str(cscs_auc))
-    # print('Change AUC:' + str(change_auc))
-    # print('Prob AUC:' + str(prob_auc))
+    ref_folder = args.data_folder + '/ref'
+
+    check_directory(ref_folder)
+
+    df = pd.DataFrame(seq_mutations.values())
+
+    df.to_pickle(ref_folder+"/ref_muts.pkl")
+    results.to_pickle(ref_folder+'ref_results.pkl')
+
+
+

@@ -584,42 +584,6 @@ def spike_muts_only(muts):
     return mut_list
 
 
-def weighted_subsample_train_test(pre_cutoff_seq, size=10000, save_path='data/processed/full_data/train_test_seq.pkl'):
-    """
-    takes a weighted subsample of pre_cutoff sequences of a specified size, with no replacement.
-    weights are determined by the absolute count of the sequences in dataset
-    :param pre_cutoff_seq: list of possible training sequences (pre cut off), values in list are strings
-    :type pre_cutoff_seq: list
-    :param size: size of training dataset to get subsample of, default is 10,000
-    :type size: int
-    :param save_path: path to pickle dump train/test dictionary
-    :type save_path: str
-    :return: dict of train and test lists
-    :rtype: dict
-    """
-    print('Number precutoff prior to subsample: {}'.format(len(pre_cutoff_seq)))
-    cnt = dict(Counter(pre_cutoff_seq))
-    seq = list(cnt.keys())
-    print('Number unique precutoff prior to subsample: {}'.format(len(seq)))
-    abs_cnt = list(cnt.values())
-    n = len(pre_cutoff_seq)
-    weights = []
-    for x in abs_cnt:
-        w = x / n
-        weights.append(w)
-    train = np.random.choice(seq, size=size, replace=False, p=weights)
-    assert len(train) == len(set(train))
-    test = [x for x in seq if x not in train]
-    assert len(test) == len(set(test))
-    train_test = {
-        'train': train,
-        'test': test
-    }
-    with open(save_path, 'wb') as f:
-        pickle.dump(train_test, f)
-    return train_test
-
-
 def subset_train_seq(pre_cutoff_seq, save_path='data/processed/full_data/train_seq_subbed.pkl'):
     print('Number precutoff prior to subsample: {}'.format(len(pre_cutoff_seq)))
     cnt_seq = dict(Counter(pre_cutoff_seq))
@@ -634,7 +598,7 @@ def subset_train_seq(pre_cutoff_seq, save_path='data/processed/full_data/train_s
     return subbed_seq
 
 
-def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
+def full_sequences_training(cut_off='2022-1-1'):
     """
     gets training sequences prepared
     saves unique training sequences -> default 'data/processed/full_data/train_seq.pkl'
@@ -642,8 +606,6 @@ def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
 
     :param cut_off: cutoff date in %Y-%m-%d format, sequences before cutoff are used for training, default is 2022-1-1
     :type cut_off: str
-    :param subsample_size: size of training dataset to get subsample of, default is 10,000
-    :type subsample_size: int
     :return: nothing, just saves unique training seq and text file with size counts
     :rtype: None
     """
@@ -660,20 +622,13 @@ def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
     n_seq_total = len(pre_cutoff_train)
     set_pre_cutoff_train = list(set(pre_cutoff_train))
     n_unique = len(set_pre_cutoff_train)
-    print('getting subsampled sequences')
-    train_test_dict = weighted_subsample_train_test(pre_cutoff_train, size=subsample_size, **kwargs)
-    n_subsampled_train = len(train_test_dict['train'])
-    n_subsampled_test = len(train_test_dict['test'])
 
     train_seq_subbed = subset_train_seq(pre_cutoff_train)
     n_train_seq_subbed = len(train_seq_subbed)
 
     message = "Cut-off:{} \nNumber Pre Cut-off Seq:{} " \
               "\nNumber Unique Training Seq:{} " \
-              "\nNumber Subbed Training Seq by frequency:{} " \
-              "\nNumber Sub-sampled Training Seq:{} " \
-              "\nNumber Sub-sampled Test Seq:{} ".format(cut_off, n_seq_total, n_unique, n_train_seq_subbed,
-                                                         n_subsampled_train, n_subsampled_test)
+              "\nNumber Subbed Training Seq by frequency:{} ".format(cut_off, n_seq_total, n_unique, n_train_seq_subbed)
     print(message)
     with open('data/processed/full_data/train_seq_info.txt', 'w') as f:
         f.write(message)
@@ -682,13 +637,6 @@ def full_sequences_training(cut_off='2022-1-1', subsample_size=10000, **kwargs):
 
 
 def get_unique_seq_data(seq_data):
-    """
-
-    :param seq_data:
-    :type seq_data:
-    :return:
-    :rtype:
-    """
     unique = {}
     for k, v in seq_data.items():
         seq = v['spike_seq']
@@ -714,12 +662,6 @@ def unique_seq_metadata(seq_data, meta_data):
     """
     calls get_unique_seq_data on the seq_data dict (holds spike sequences)
     filters meta_data df to just those accessions
-    :param seq_data:
-    :type seq_data:
-    :param meta_data:
-    :type meta_data:
-    :return:
-    :rtype:
     """
     print('Number of sequences: {}'.format(len(seq_data)))
 
@@ -734,9 +676,7 @@ def unique_seq_metadata(seq_data, meta_data):
 
 def mutation_summary_full_data(mut_save_path="data/processed/full_data/mutts.pkl", unique=True):
     """
-
-    :return:
-    :rtype:
+    Gets mutation summary from metadata
     """
     if unique:
         df = pd.read_pickle('data/MetaData/sequences_metadata_final_unique.pkl')
