@@ -155,7 +155,7 @@ def results_over_thresholds(seq_mutations, sig_muts, seq_identifier, mapped_cnt,
     if seq_identifier != 'ref_seq':
         result_meta['parent_hash'] = seq_identifier
     else:
-        result_meta['seq'] = 'ref'
+        result_meta['parent_hash'] = 'ref'
     if parent_in_train is not None:
         result_meta['parent_in_train'] = parent_in_train
 

@@ -9,6 +9,7 @@ from DataHelpers import check_directory, combine_seq_dicts, folder_file_list
 import uuid
 import json
 
+
 def prep_exp_data(pc, include_change=True, include_attn=True):
     """
 
@@ -243,14 +244,15 @@ class BioTransExpSettings(object):
         self.seq_attn_path = self.data_folder + '/tree_v{}_seq_attn_{}.pkl'.format(self.tree_version, train_str)
 
 
-class MutateParentChild(BioTransExpSettings):
+class ParentChildMutateExp(BioTransExpSettings):
     """
 
     """
 
-    def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=True):
-        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change,
-                         cut_off='2022-1-1')
+    def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=False,
+                 cut_off='2022-1-1'):
+        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off)
+        self.reference_only = False
         self.train_seq = None
         self.mutation_data = None
         self.new_mutations = None
@@ -316,13 +318,19 @@ class MutateParentChild(BioTransExpSettings):
         self.sequence_language_model_values(include_change=include_change, include_attn=include_attn,
                                             **(seq_values_kwargs or {}))
         if not seq_values_only:
-            if load_previous:
-                self.load_exp_results(save_name=save_name, excel=csv)
-            else:
-                self.mutate_parents(include_change=include_change, include_attn=include_attn,
-                                    **(mutate_parents_kwargs or {}))
-                self.mut_summary()
-                self.save_data(csv=csv, save_class=save_class, save_name=save_name)
+            self.calc_results(csv=csv, save_class=save_class, include_change=include_change, include_attn=include_attn,
+                              save_name=save_name, load_previous=load_previous,
+                              mutate_parents_kwargs=mutate_parents_kwargs)
+
+    def calc_results(self, csv=True, save_class=False, include_change=True, include_attn=False, save_name=None,
+                     load_previous=False, mutate_parents_kwargs=None):
+        if load_previous:
+            self.load_exp_results(save_name=save_name, csv=csv)
+        else:
+            self.mutate_parents(include_change=include_change, include_attn=include_attn,
+                                **(mutate_parents_kwargs or {}))
+            self.mut_summary()
+            self.save_data(csv=csv, save_class=save_class, save_name=save_name)
 
     def load_exp_data(self):
         # load leaf mutt dict
@@ -334,9 +342,6 @@ class MutateParentChild(BioTransExpSettings):
         self.new_muts = self.new_mutations['mutation'].values.tolist()
         self.old_muts = self.mutation_data[~(self.mutation_data.mutation.isin(self.new_muts))][
             'mutation'].values.tolist()
-        # load reference results
-        # ref_path = self.exp_folder + '/pbert_ft_ref.pkl'
-        # self.ref_results = pd.read_pickle(ref_path)
         self.ref_exp_muts = self.new_mutations[(self.new_mutations['mut_type'] == 'sub')]['mutation'].values.tolist()
         # load train_seq
         train_seq_path = self.exp_folder + '/train_seq.pkl'
@@ -378,11 +383,12 @@ class MutateParentChild(BioTransExpSettings):
         for node_id, node in self.tree_nodes.items():
             if node.root:
                 self.seqs.append(node.spike_seq)
-        for k, v in self.parent_child.items():
-            seq = self.tree_nodes[k].spike_seq
-            self.seqs.append(seq)
-        self.seqs = list(set(self.seqs))
-        print('Total Unique Parent Sequences: {}'.format(len(self.seqs)))
+        if not self.reference_only:
+            for k, v in self.parent_child.items():
+                seq = self.tree_nodes[k].spike_seq
+                self.seqs.append(seq)
+            self.seqs = list(set(self.seqs))
+            print('Total Unique Parent Sequences: {}'.format(len(self.seqs)))
 
     def sequence_language_model_values(self, list_seq_batchsize=15, prob_batchsize=20,
                                        seq_batchsize=400, embedding_batchsize=40, include_change=True,
@@ -503,17 +509,22 @@ class MutateParentChild(BioTransExpSettings):
             with open(self.seq_change_path, 'wb') as a:
                 pickle.dump(self.seq_change, a)
 
-    def prep_parent_seq(self, parent_seq, include_change=True, include_attn=True):
-        parent_ids = self.seq_parents[parent_seq]
-        probabilities = self.seq_probabilities[parent_seq]
+    def prep_seq_mutation_dict(self, seq, sig_muts, include_change=True, include_attn=True):
+        probabilities = self.seq_probabilities[seq]
         if include_change:
-            changes = self.seq_change[parent_seq]
+            changes = self.seq_change[seq]
         else:
             changes = None
         if include_attn:
-            attn = self.seq_attn[parent_seq]
+            attn = self.seq_attn[seq]
         else:
             attn = None
+        seq_mutations = get_seq_mutation_dict(seq=seq, probabilities=probabilities, changes=changes,
+                                              significant_mutations=sig_muts, attn=attn)
+        return seq_mutations
+
+    def prep_parent_seq(self, parent_seq, include_change=True, include_attn=True):
+        parent_ids = self.seq_parents[parent_seq]
         sig_muts = []
         mut_map = {}
         mapped_cnt = {}
@@ -527,8 +538,8 @@ class MutateParentChild(BioTransExpSettings):
                 mapped_cnt.update(child['mapped_cnt'])
         sig_muts = [x for x in sig_muts if x in mut_map and mut_map[x] in self.ref_exp_muts]
         sig_muts = list(set(sig_muts))
-        seq_mutations = get_seq_mutation_dict(seq=parent_seq, probabilities=probabilities, changes=changes,
-                                              significant_mutations=sig_muts, attn=attn)
+        seq_mutations = self.prep_seq_mutation_dict(parent_seq, sig_muts, include_change=include_change,
+                                                    include_attn=include_attn)
         return seq_mutations, sig_muts, mut_map, mapped_cnt
 
     def mutate_single_parent(self, parent_seq, include_change=True, include_attn=True, **ranking_values):
@@ -599,10 +610,14 @@ class MutateParentChild(BioTransExpSettings):
             norm = 'l1'
         else:
             norm = 'l2'
+        if self.reference_only:
+            base_pref = 'ref'
+        else:
+            base_pref = 'pc'
         if save_name is not None:
             base_name = save_name
         else:
-            base_name = 'pc_tree_v{}_{}_{}_{}_mode'.format(self.tree_version, train_str, norm, mode_str)
+            base_name = '{}_tree_v{}_{}_{}_{}_mode'.format(base_pref, self.tree_version, train_str, norm, mode_str)
         return base_name
 
     def save_data(self, csv=True, save_class=False, save_name=None):
@@ -610,10 +625,10 @@ class MutateParentChild(BioTransExpSettings):
         base_name = self.get_savename(save_name=save_name)
         check_directory(save_folder)
         if csv:
-            file_name = base_name + '.xlsx'
-            summary_file_name = base_name + '_summary.xlsx'
-            self.results.to_excel(save_folder + '/' + file_name)
-            self.results_summary.to_excel(save_folder + '/' + summary_file_name)
+            file_name = base_name + '.csv'
+            summary_file_name = base_name + '_summary.csv'
+            self.results.to_csv(save_folder + '/' + file_name)
+            self.results_summary.to_csv(save_folder + '/' + summary_file_name)
         else:
             file_name = base_name + '.pkl'
             summary_file_name = base_name + "_summary.pkl"
@@ -623,15 +638,15 @@ class MutateParentChild(BioTransExpSettings):
             with open(base_name + '_MutateParentChild.pkl', 'wb') as file:
                 pickle.dump(self, file)
 
-    def load_exp_results(self, save_name=None, excel=False):
+    def load_exp_results(self, save_name=None, csv=False):
         save_folder = self.data_folder + "/results"
         base_name = self.get_savename(save_name=save_name)
-        if excel:
-            file_name = base_name + '.xlsx'
-            summary_file_name = base_name + '_summary.xlsx'
+        if csv:
+            file_name = base_name + '.csv'
+            summary_file_name = base_name + '_summary.csv'
             try:
-                self.results = pd.read_excel(save_folder + '/' + file_name)
-                self.results_summary = pd.read_excel(save_folder + '/' + summary_file_name)
+                self.results = pd.read_csv(save_folder + '/' + file_name)
+                self.results_summary = pd.read_csv(save_folder + '/' + summary_file_name)
             except FileNotFoundError:
                 print("Designated Savefile doesn't exist!")
         else:
@@ -677,15 +692,15 @@ def parse_args():
                         help='mini sequence batchsize for embedding')
     parser.add_argument('--sub_parentid_path', type=str, default=None,
                         help='if provided, load a list of parent_ids to subset the experiment to')
-    parser.add_argument('--csv',  action='store_true',
+    parser.add_argument('--csv', action='store_true',
                         help='if provided, save results in CSV format.')
-    parser.add_argument('--load_previous',  action='store_true',
+    parser.add_argument('--load_previous', action='store_true',
                         help='if provided, save results in CSV format.')
-    parser.add_argument('--alpha',  type=float, default=1.5,
+    parser.add_argument('--alpha', type=float, default=1.5,
                         help='Semantic Change weighting value for DNMS.')
-    parser.add_argument('--beta',  type=float, default=3.0,
+    parser.add_argument('--beta', type=float, default=3.0,
                         help='Grammaticality weighting value for DNMS.')
-    parser.add_argument('--gamma',  type=float, default=1.0,
+    parser.add_argument('--gamma', type=float, default=1.0,
                         help='Attention Change weighting value for DNMS.')
     arguments = parser.parse_args()
     return arguments
@@ -695,11 +710,11 @@ if __name__ == "__main__":
     args = parse_args()
     print(args)
 
-    parent_child_exp = MutateParentChild(tree_version=args.tree_version,
-                                         finetuned=args.finetuned,
-                                         forward_mode=args.masked_mode,
-                                         data_folder=args.data_folder,
-                                         l1_change=args.l2_norm)
+    parent_child_exp = ParentChildMutateExp(tree_version=args.tree_version,
+                                            finetuned=args.finetuned,
+                                            forward_mode=args.masked_mode,
+                                            data_folder=args.data_folder,
+                                            l1_change=args.l2_norm)
 
     print("Finetuned is: {}".format(parent_child_exp.finetuned))
     print("Forward Mode is: {}".format(parent_child_exp.forward_mode))
@@ -730,4 +745,3 @@ if __name__ == "__main__":
                                     seq_values_only=args.seq_values_only, csv=args.csv,
                                     subset_parentids=sub_parentids, seq_values_kwargs=seq_value_params,
                                     load_previous=args.load_previous, mutate_parents_kwargs=mutate_params)
-

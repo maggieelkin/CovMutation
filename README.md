@@ -1,7 +1,7 @@
 # Paying Attention to SARS-CoV-2 Dialect
 
 This repository contains analysis code, links to data and trained models for the paper "Paying Attention to SARS-CoV-2 Dialect: A
-Deep Neural Network Approach to Predicting Novel Mutations" by Magdalyn E. Elkin, Xingquan Zhu. 
+Deep Neural Network Approach to Predicting Novel Mutations" by Magdalyn E. Elkin & Xingquan Zhu. 
 
 ## Requirements
 
@@ -41,7 +41,18 @@ data
             │   ref_ft_l2_forward_mode_summary.csv
 ```
 
+## Model
 
+You can download our fine tuned [ProtBert model here] and place under directory `logs` so that it has this file path:
+
+
+```
+logs
+└───protbert_full_sub_ft_v1
+    └───version_2
+        └───checkpoints
+            └───epoch=3-step=91.ckpt 
+```
 
 ## Data Files Breakdown
 
@@ -217,11 +228,25 @@ python bin/ParentChildMutate.py --tree_version 1 \
     > pc_mut_results.log 2>&1
 ```
 
-## Reproducing figures from published results
+### Reference Experiment
 
-### Parent-Child Results
+Running the command to calculate language model values for the parent sequences will also include the reference sequence. 
+Althought the reference sequence is excluded from results when calling `ParentCHildMutate.py`
 
-### Reference Results
+To only calculate language model values for the reference sequence, or to calculate results for the reference experiment:
+
+```bash
+python bin/RefSeqMutate.py --tree_version 1 \
+    --include_change --include_attn --l2_norm \
+    --combine --finetuned --csv \
+    --data_folder data/processed/ncbi_tree_v1 \
+    --alpha 1.5 --beta 3.0 --gamma 1.0 \
+    > ref_results.log 2>&1
+```
+
+Simiarly as stated above, it may be beneficial to calculate values separately at first.
+
+
 
 
 

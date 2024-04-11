@@ -86,9 +86,9 @@ def load_biotrans(model_path=None):
     :rtype:
     """
     n_gpu = torch.cuda.device_count()
-    #if n_gpu > 1:
+    if n_gpu > 1:
         # can be an issue with multi-gpu when loading bio_trans for inference
-    #    n_gpu = 1
+       n_gpu = 1
     if ray.is_initialized():
         ray.shutdown()
     ray.init()
