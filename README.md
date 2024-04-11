@@ -209,8 +209,8 @@ python bin/ParentChildMutate.py --tree_version 1 \
 
 ```bash
 python bin/ParentChildMutate.py --tree_version 1 \
-    --seq_values_only --include_attn \
-    --data_folder data/processed/ncbi_tree_v1 \
+    --seq_values_only --include_attn --finetuned \
+    --combine --data_folder data/processed/ncbi_tree_v1 \
     > pc_mut_attn.log 2>&1
 ```
 
