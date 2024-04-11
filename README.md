@@ -123,7 +123,6 @@ Results subfolder contain full and summary AUC calculations for mutations. Resul
 
 # Usage
 
-## Reproducing figures from published results
 
 ## Experiments
 
@@ -218,7 +217,11 @@ python bin/ParentChildMutate.py --tree_version 1 \
     > pc_mut_results.log 2>&1
 ```
 
+## Reproducing figures from published results
 
+### Parent-Child Results
+
+### Reference Results
 
 
 
