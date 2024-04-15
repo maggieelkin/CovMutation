@@ -19,10 +19,10 @@ class RefSeqMutateExp(ParentChildMutateExp):
         :type mutate_parents_kwargs: dict
         :param seq_values_kwargs: parameters to calculate sequence values
         :type seq_values_kwargs: dict
-        :param include_attn:
-        :type include_attn:
-        :param seq_values_only:
-        :type seq_values_only:
+        :param include_attn: If true, include attention in experiment. Can be left out if just calculating values
+        :type include_attn: bool
+        :param seq_values_only: If true, only calculate sequence values, skips saving/calculating results
+        :type seq_values_only: bool
         :param save_name: save name if loading different save base name
         :type save_name: str
         :param subset_parentids: list of parentids to subset experiment to
@@ -35,8 +35,6 @@ class RefSeqMutateExp(ParentChildMutateExp):
         :type csv: bool
         :param save_class: if true, pickle the whole class
         :type save_class: bool
-        :return:
-        :rtype:
         """
         self.sequence_language_model_values(include_change=include_change, include_attn=include_attn,
                                             **(seq_values_kwargs or {}))

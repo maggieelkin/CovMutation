@@ -10,33 +10,6 @@ import uuid
 import json
 
 
-def prep_exp_data(pc, include_change=True, include_attn=True):
-    """
-
-    :param pc:
-    :type pc:
-    :param include_change:
-    :type include_change:
-    :param include_attn:
-    :type include_attn:
-    :return:
-    :rtype:
-    """
-    exp_data = []
-    for parent_seq, parent_ids in pc.seq_parents.items():
-        seq_mutations, sig_muts, mut_map, mapped_cnt = pc.prep_parent_seq(parent_seq=parent_seq,
-                                                                          include_change=include_change,
-                                                                          include_attn=include_attn)
-        parent_hash = pc.seq_hash[parent_seq]
-        data = {'parent_hash': parent_hash}
-        data['seq_mutations'] = seq_mutations
-        data['sig_muts'] = sig_muts
-        data['mut_map'] = mut_map
-        data['mapped_cnt'] = mapped_cnt
-        exp_data.append(data.copy())
-    return exp_data
-
-
 def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
     """
 
@@ -627,8 +600,8 @@ class ParentChildMutateExp(BioTransExpSettings):
         if csv:
             file_name = base_name + '.csv'
             summary_file_name = base_name + '_summary.csv'
-            self.results.to_csv(save_folder + '/' + file_name)
-            self.results_summary.to_csv(save_folder + '/' + summary_file_name)
+            self.results.to_csv(save_folder + '/' + file_name, index=False)
+            self.results_summary.to_csv(save_folder + '/' + summary_file_name, index=False)
         else:
             file_name = base_name + '.pkl'
             summary_file_name = base_name + "_summary.pkl"

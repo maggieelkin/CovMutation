@@ -9,9 +9,6 @@ import argparse
 
 
 def get_rbd_pos_dict_mutations(df):
-    # df = pd.read_csv(file_path)
-    # df = df[(df['wildtype'] != df['mutation'])]
-    # df = df[~(df['mutation'] == '*')]
     mutations = df['mutant'].values.tolist()
     df['site'] = df['site'] - 1
     df = df[['wildtype', 'site']].drop_duplicates()
@@ -305,7 +302,6 @@ if __name__ == "__main__":
                                   data_folder=args.data_folder,
                                   l1_change=args.l2_norm)
 
-    print("masked mode arg: {}".format(args.masked_mode))
     print("Finetuned is: {}".format(fitness_exp.finetuned))
     print("Forward Mode is: {}".format(fitness_exp.forward_mode))
     print("L1 change is: {}".format(fitness_exp.l1_change))

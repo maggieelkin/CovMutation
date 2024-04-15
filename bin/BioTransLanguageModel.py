@@ -16,19 +16,18 @@ import copy
 
 def biotrans_probabilities(bio_trans, seqs, batchsize, forward_mode=False):
     """
+    Calculates probabilities for a list of sequences, which have to be passed as a list of strings
 
     :param batchsize: batchsize for compute_probabilities
     :type batchsize: int
     :param bio_trans: biotransformer model
-    :type bio_trans:
+    :type bio_trans: biotransformers.wrappers.transformers_wrappers.TransformersWrapper
     :param seqs: list of sequences to compute probabiltiies for
     :type seqs: list
     :param forward_mode: if true, do forward mode for biotrans
     :type forward_mode: bool
     :return: dictionary of key = sequence, value = predicted probabilities
     :rtype: dict
-    :return:
-    :rtype:
     """
     if forward_mode:
         probabilities = bio_trans.compute_probabilities(seqs, pass_mode='forward', batch_size=batchsize)
@@ -42,6 +41,8 @@ def compute_probabilities(bio_trans, seqs, batchsize, chunksize=None, forward_mo
                           prior_seq_probabilities=None):
     """
     function to compute probabilities for a list of sequences
+    Uses ability to chunk sequences to decrease working memory for biotransformer wrapper
+
     :param prior_seq_probabilities: starting dictionary of seq_probabilities
     :type prior_seq_probabilities: dict
     :param save_path: path to save chunks of seq_probabilities
@@ -51,7 +52,7 @@ def compute_probabilities(bio_trans, seqs, batchsize, chunksize=None, forward_mo
     :param batchsize: batchsize for compute_probabilities
     :type batchsize: int
     :param bio_trans: biotransformer model
-    :type bio_trans:
+    :type bio_trans: biotransformers.wrappers.transformers_wrappers.TransformersWrapper
     :param seqs: list of sequences to compute probabiltiies for
     :type seqs: list
     :param forward_mode: if true, do forward mode for biotrans
@@ -79,11 +80,14 @@ def compute_probabilities(bio_trans, seqs, batchsize, chunksize=None, forward_mo
 
 def load_biotrans(model_path=None):
     """
+    Loads fine tuned biotransformer if given a model path to a checkpoint file
+    Uses the biotransformers wrapper. This has some error when loading fine tuned model with multi-gpu, thus limits
+    gpu to 1 if loading.
 
-    :param model_path:
-    :type model_path:
-    :return:
-    :rtype:
+    :param model_path: path to biotransformer model checkpoint
+    :type model_path: str
+    :return: biotransformer wrapper
+    :rtype: biotransformers.wrappers.transformers_wrappers.TransformersWrapper
     """
     n_gpu = torch.cuda.device_count()
     if n_gpu > 1:
@@ -100,8 +104,9 @@ def load_biotrans(model_path=None):
 
 
 def get_alphabet_dataloader(tokenizer, model_dir):
-    """Define an alphabet mapping for common method between
-    protbert and ESM
+    """
+    Define an alphabet mapping for common method between protbert
+    Helper function taken from Biotransformers package to help when loading transformer for attention
     """
 
     def tokenize(x):
@@ -132,13 +137,16 @@ def get_alphabet_dataloader(tokenizer, model_dir):
 
 def load_biotrans_for_attn(device, model_path=None):
     """
+    Loads the transformer outside of biotransformer wrapper for calculating attention
+    Biotransformer wrapper package doesn't give ability to output attention, so this has to be loaded outside of
+    wrapper package if calculating attention
 
-    :param device:
-    :type device:
-    :param model_path:
-    :type model_path:
-    :return:
-    :rtype:
+    :param device: torch device for loading
+    :type device: torch.device
+    :param model_path: path to finetuned checkpoint
+    :type model_path: str
+    :return: tokenizer and transformer model (transformers.models.bert.modeling_bert.BertForMaskedLM)
+    :rtype: tuple
     """
     model_dir = "Rostlab/prot_bert"
     tokenizer = BertTokenizer.from_pretrained(
@@ -163,15 +171,16 @@ def load_biotrans_for_attn(device, model_path=None):
 
 def format_attention_torch(attention, layers=None, heads=None):
     """
+    Formats attention output from transformer model
 
-    :param attention:
-    :type attention:
-    :param layers:
-    :type layers:
-    :param heads:
-    :type heads:
-    :return:
-    :rtype:
+    :param attention: attention output from transformer model
+    :type attention: torch.Tensor
+    :param layers: if provided return attention for specific layers in list of layer indices
+    :type layers: list
+    :param heads: if provided return attention for specific heads in list of head indices
+    :type heads: list
+    :return: formatted attention in form of num_layers x num_heads x seq_len x seq_len
+    :rtype: torch.Tensor
     """
     if layers:
         attention = [attention[layer_index] for layer_index in layers]
@@ -191,11 +200,12 @@ def format_attention_torch(attention, layers=None, heads=None):
 
 def get_layer_attentions_per_sample(layer_attentions):
     """
-
-    :param layer_attentions:
-    :type layer_attentions:
-    :return:
-    :rtype:
+    reshapes attention output so that it's a list of input samples and each attention weight ouutput becomes
+    a matrix of num_layers x num_heads x seq_len x seq_len
+    :param layer_attentions: attention output after detaching from device and creating numpy array
+    :type layer_attentions: numpy.ndarray
+    :return: list of layer attentions per sample
+    :rtype: list
     """
     attn_samples = []
     if len(layer_attentions.shape) > 4:
@@ -208,19 +218,6 @@ def get_layer_attentions_per_sample(layer_attentions):
 
 
 def get_attention_multiple_seqs(seqs, tokenizer, model, device):
-    """
-
-    :param seqs:
-    :type seqs:
-    :param tokenizer:
-    :type tokenizer:
-    :param model:
-    :type model:
-    :param device:
-    :type device:
-    :return:
-    :rtype:
-    """
     input_seq_ids = prep_sequences_for_attn(seqs=seqs, tokenizer=tokenizer)
     with torch.no_grad():
         attention = model(input_seq_ids.to(device))[-1]
@@ -233,13 +230,14 @@ def get_attention_multiple_seqs(seqs, tokenizer, model, device):
 
 def prep_sequences_for_attn(seqs, tokenizer):
     """
+    preps sequences for attention. Sequences get separated with space before passed to tokenizer
 
-    :param seqs:
-    :type seqs:
-    :param tokenizer:
-    :type tokenizer:
-    :return:
-    :rtype:
+    :param seqs: list of sequences in string format
+    :type seqs: any
+    :param tokenizer: bert model tokenizer
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :return: formatted input sequences
+    :rtype: torch.Tensor
     """
     if isinstance(seqs, str):
         seq_list = [seqs]
@@ -254,17 +252,19 @@ def prep_sequences_for_attn(seqs, tokenizer):
 
 def get_attention(seq, tokenizer, model, device):
     """
+    Get attention output for 1 sequence and return numpy array.
+    Usage is for the primary sequence of interest.
 
-    :param seq:
-    :type seq:
-    :param tokenizer:
-    :type tokenizer:
-    :param model:
-    :type model:
-    :param device:
-    :type device:
-    :return:
-    :rtype:
+    :param seq: sequence input for model
+    :type seq: str
+    :param tokenizer: tokenizer output from load_biotrans_for_attn
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :param model: bio_trans output from load_biotrans_for_attn
+    :type model: transformers.models.bert.modeling_bert.BertForMaskedLM
+    :param device: torch device
+    :type device: torch.device
+    :return: numpy array attention weights for the sequence of interest
+    :rtype: numpy.ndarray
     """
     input_seq_ids = prep_sequences_for_attn(seqs=seq, tokenizer=tokenizer)
     with torch.no_grad():
@@ -276,17 +276,19 @@ def get_attention(seq, tokenizer, model, device):
 
 def pool_attention(layer_attentions, pool_heads_max=True, pool_layer_max=True):
     """
+    pools attention input of size (30,16,N,N) -> (layers, heads, N, N) where N = length of sequence
+    Creates Attention Matrix A of size (N,N)
     pools heads first (axis 1) and then layers
     default is max, does mean otherwise
 
-    :param pool_heads_max:
-    :type pool_heads_max:
-    :param layer_attentions:
-    :type layer_attentions:
-    :param pool_layer_max:
-    :type pool_layer_max:
-    :return:
-    :rtype:
+    :param layer_attentions: attention matrix of size (30,16,N,N)
+    :type layer_attentions: numpy.ndarray
+    :param pool_heads_max: If true, do max pooling of attention heads. Do mean otherwise
+    :type pool_heads_max: bool
+    :param pool_layer_max: If true, do max pooling of attention layers. Do mean otherwise
+    :type pool_layer_max: bool
+    :return: pooled attention of size (N,N)
+    :rtype: numpy.ndarray
     """
     if pool_heads_max:
         attn = layer_attentions.max(axis=1)
@@ -393,6 +395,9 @@ def calculate_sequence_embedding(seqs, bio_trans, embedding_batchsize, seq_embed
 def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embedding_batchsize, l1_norm=False,
                                   subset_mutations=None):
     """
+    Calculate semantic change of all mutations for a sequence of interest
+    using subset_mutations decreases the amount of mutated sequences to calculate for and pass to the
+    biotransformer model.
 
     :param subset_mutations: list of subset mutations to include, allows to only consider some mutations
     :type subset_mutations: list
@@ -405,9 +410,9 @@ def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embed
     :param seq_to_mutate: sequence to mutated and get embedding difference for each mutation
     :type seq_to_mutate: str
     :param bio_trans: biotransformer model
-    :type bio_trans:
-    :return:
-    :rtype:
+    :type bio_trans: biotransformers.wrappers.transformers_wrappers.TransformersWrapper
+    :return: dictionary of key = mutation string and value = semantic change
+    :rtype: dict
     """
     seqs_mutated = mutate_seq_insilico(seq_to_mutate, subset_mutations=subset_mutations)
     ref_embedding = bio_trans.compute_embeddings([seq_to_mutate], batch_size=embedding_batchsize)
@@ -438,6 +443,7 @@ def get_mutation_embedding_change(seq_to_mutate, bio_trans, seq_batchsize, embed
 
 def calc_array_distance(array1, array2, l1_norm=True):
     """
+    Calculates difference between two arrays
 
     :param array1: reference (or sequence) array, can be embedding or attention matrix
     :type array1: np.ndarray
@@ -446,7 +452,7 @@ def calc_array_distance(array1, array2, l1_norm=True):
     :param l1_norm: if true, change is based on l1_norm, does l2_norm otherwise. Default is true
     :type l1_norm: bool
     :return: matrix distance
-    :rtype:
+    :rtype: float
     """
     if l1_norm:
         change = abs(array1 - array2).sum()
@@ -503,10 +509,12 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
 def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
                             pool_heads_max=True, pool_layer_max=True, l1_norm=False, subset_mutations=None):
     """
+    Calculate attention change for sequences in batches
+    Incrementally saves output to save_path
 
     :param subset_mutations: needs to be a list of lists of subset_mutations for each seq in seqs, if using a subset
     :type subset_mutations: list
-    :param model_path: path of fine tuned checkpoint to load biotrans
+    :param model_path: path of finetuned checkpoint to load biotrans
     :type model_path: str
     :param seqs: list of seqs to mutate and get attention changes
     :type seqs: list
@@ -520,8 +528,8 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
     :type pool_layer_max: bool
     :param l1_norm: to use L1 norm distance,default is False
     :type l1_norm: bool
-    :return:
-    :rtype:
+    :return: dict where key = sequence, value = attention change for mutations
+    :rtype: dict
     """
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
@@ -548,25 +556,29 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
 def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
                                   pool_layer_max=True, l1_norm=False, subset_mutations=None):
     """
+    uses multi processing with Ray to calculate attention change for a single sequence
+    attention change is calculated from passing each mutated sequence into the bio transformer and returning attention
+    matrices and attention change is calculated as difference betwen sequence of interest and the mutated sequence
+    Can be computationally expensive so uses multi-processing with Ray for efficiency
 
-    :param seq_to_mutate:
-    :type seq_to_mutate:
-    :param bio_trans:
-    :type bio_trans:
-    :param tokenizer:
-    :type tokenizer:
-    :param device:
-    :type device:
-    :param pool_heads_max:
-    :type pool_heads_max:
-    :param pool_layer_max:
-    :type pool_layer_max:
-    :param l1_norm:
-    :type l1_norm:
-    :param subset_mutations:
-    :type subset_mutations:
-    :return:
-    :rtype:
+    :param seq_to_mutate: sequence of interest
+    :type seq_to_mutate: str
+    :param bio_trans: bio_trans output from load_biotrans_for_attn
+    :type bio_trans: transformers.models.bert.modeling_bert.BertForMaskedLM
+    :param tokenizer: tokenizer output from load_biotrans_for_attn
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :param device: torch device
+    :type device: torch.device
+    :param pool_heads_max: if true pool heads with max, mean otherwise. Default True
+    :type pool_heads_max: bool
+    :param pool_layer_max: if true pool layers with max, mean otherwise. Default True
+    :type pool_layer_max: bool
+    :param l1_norm: if true, use l1 norm, use l2 norm otherwise. default is false
+    :type l1_norm: bool
+    :param subset_mutations: if provided, calc attention change for only this subset of mutations
+    :type subset_mutations: list
+    :return: dictionary of key = mutation, value = attention change
+    :rtype: dict
     """
     if ray.is_initialized():
         ray.shutdown()
@@ -619,17 +631,18 @@ class BertActor:
 
 def process_incremental(results, mut_attn_dict, ref_attn, l1_norm):
     """
+    calc function that drives attention change calculation during multiprocessing for attention change
 
-    :param l1_norm:
-    :type l1_norm:
-    :param results:
-    :type results:
-    :param mut_attn_dict:
-    :type mut_attn_dict:
-    :param ref_attn:
-    :type ref_attn:
-    :return:
-    :rtype:
+    :param l1_norm: if true, use l1 norm, use l2 norm otherwise
+    :type l1_norm: bool
+    :param results: mutation attention change results to add to
+    :type results: dict
+    :param mut_attn_dict: dict of key = mutation, value = attention matrix
+    :type mut_attn_dict: dict
+    :param ref_attn: sequence of interest attention matrix
+    :type ref_attn: numpy.ndarray
+    :return: adds to results dict
+    :rtype: dict
     """
     for mut, mut_attn in mut_attn_dict.items():
         attn_change = calc_array_distance(array1=ref_attn, array2=mut_attn, l1_norm=l1_norm)
@@ -639,15 +652,16 @@ def process_incremental(results, mut_attn_dict, ref_attn, l1_norm):
 
 def process_incremental_mean_attn(results, attn_dict, index_seq_dict):
     """
+    Function used when calculating mean attention matrices for sequences in tree for visualization
 
-    :param index_seq_dict:
-    :type index_seq_dict:
-    :param results:
-    :type results:
-    :param attn_dict:
-    :type attn_dict:
-    :return:
-    :rtype:
+    :param index_seq_dict: dict of key =index, value = sequence
+    :type index_seq_dict: dict
+    :param results: reuslts dict to add to
+    :type results: dict
+    :param attn_dict: attention  matrix dict
+    :type attn_dict: dict
+    :return: added results dict
+    :rtype: dict
     """
     for index, attn in attn_dict.items():
         seq = index_seq_dict[index]
