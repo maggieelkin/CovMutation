@@ -1,11 +1,11 @@
 import os.path
-
 from BioTransLanguageModel import *
 from DataHelpers import read_tsv_file
 from NCBIData import spike_muts_only
 from ParentChildMutate import BioTransExpSettings
 from MutationHelpers import *
 import argparse
+from scipy.stats import spearmanr
 
 
 def get_rbd_pos_dict_mutations(df):
@@ -35,6 +35,43 @@ def get_corrected_mutations(ref_seq, mutations_from_ref, mutations_to_correct):
     return corrected_mutations
 
 
+def get_corr_df(rbd_data, strain):
+    mutation_score = rbd_data[(rbd_data['target_name'] == strain)]
+    cols = ['binding', 'expression']
+    rows = ['prob', 'change', 'attn']
+    corr_df = pd.DataFrame(index=rows, columns=cols, dtype=float)
+    pval_df = pd.DataFrame(index=rows, columns=cols, dtype=float)
+
+    n_tests = 0
+    for i, col in enumerate(cols):
+        for j, row in enumerate(rows):
+            n_tests += 1
+            data = mutation_score[(mutation_score[col].notnull()) & (mutation_score[row].notnull())]
+            corr_coef, p_value = spearmanr(data[col], data[row])
+            corr_df.iloc[j, i] = corr_coef
+            pval_df.iloc[j, i] = p_value
+    corrected_pval = pval_df / n_tests
+    sig_threshold = 0.05
+    # sig_mask creates NaN where values are not significant
+    sig_mask = corrected_pval < sig_threshold
+    sig_corr_df = corrected_pval.copy()
+    sig_corr_df[~sig_mask] = np.nan
+    corr = prep_corr_df(corr_df)
+    sig = prep_corr_df(sig_corr_df)
+    result = pd.merge(corr, sig, on=['Fitness Measure', 'variable'], suffixes=('', '_pval'))
+    result.insert(0, 'target_name', strain)
+    return result
+
+
+def prep_corr_df(corr_df):
+    df = corr_df.T.reset_index()
+    df.columns = ['Fitness Measure', 'Grammaticality', 'Semantic Change',
+                  'Attention Change']
+    df1 = pd.melt(df, id_vars=['Fitness Measure'])
+    df1['Fitness Measure'] = df1['Fitness Measure'].str.capitalize()
+    return df1
+
+
 class BioTransFitness(BioTransExpSettings):
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, l1_change=False):
         super().__init__(tree_version, data_folder, finetuned=finetuned, forward_mode=forward_mode,
@@ -51,19 +88,13 @@ class BioTransFitness(BioTransExpSettings):
         self.seq_muts_from_ref = {}
         self.clade_record_dict = {'WT': 'Wuhan/Hu-1/2019',
                                   'BA.1': 'hCoV-19/England/LSPA-363D038/2022|EPI_ISL_10000028|2022-02-07',
-                                  'BA.2': 'hCoV-19/Scotland/QEUH-363F151/2022|EPI_ISL_10000005|2022-02-08',
-                                  'BA.5': 'hCoV-19/South_Africa/CERI-KRISP-K037633/2022|EPI_ISL_11207535|2022-03-11',
-                                  'BA.2.75': 'hCoV-19/India/MH-INSACOG-CSIR-NEERI1874/2022|EPI_ISL_13302209|2022-06-07'
+                                  'BA.2': 'hCoV-19/Scotland/QEUH-363F151/2022|EPI_ISL_10000005|2022-02-08'
                                   }
         self.strains_files = {'WT': 'bind_expr_WT.csv',
                               'BA.1': 'bind_expr_BA1.csv',
                               'BA.2': 'bind_expr_BA2.csv',
-                              'BA.5': 'bind_expr_BA2.csv',
-                              'BA.2.75': 'bind_expr_BA2.csv'
                               }
-        self.adjusted_muts = {'BA.2.75': [(339, 'H'), (446, 'S'), (460, 'K'), (493, 'Q')],
-                              'BA.5': [(452, 'R'), (486, 'V'), (493, 'Q')]
-                              }
+        self.adjusted_muts = {}
 
     def run_experiment(self, include_calcs=None, list_seq_batchsize=15, prob_batchsize=20, seq_batchsize=400,
                        embedding_batchsize=40, pool_heads_max=True, pool_layer_max=True, l1_norm=False):
@@ -72,6 +103,7 @@ class BioTransFitness(BioTransExpSettings):
                                    prob_batchsize=prob_batchsize, seq_batchsize=seq_batchsize,
                                    embedding_batchsize=embedding_batchsize, pool_heads_max=pool_heads_max,
                                    pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+        self.rbd_data_results()
 
     def prep_exp_data(self):
         self.exp_data = pd.DataFrame()
@@ -106,7 +138,7 @@ class BioTransFitness(BioTransExpSettings):
             raise ValueError("Sequence doesn't match RBD WT from Experiment, check {}".format(strain))
         seq_meta = {'strain': strain, 'seq_id': self.clade_record_dict[strain], 'tested_muts': tested_mutations}
         self.target_seq_meta[ref_seq] = seq_meta
-        omicron_strains = ['BA.1', 'BA.2', 'BA.5', 'BA.2.75']
+        omicron_strains = ['BA.1', 'BA.2']
         for strain in omicron_strains:
             data = self.exp_data[(self.exp_data['target_name'] == strain)]
             rbd_pos, tested_mutations = get_rbd_pos_dict_mutations(data)

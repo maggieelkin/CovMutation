@@ -31,6 +31,19 @@ data
         │       mutation_data.pkl
         │       train_seq.pkl
         │       
+        ├───rbd_exp_omicron
+        │   │   nextclade_omicron.tsv
+        │   │   nextclade_omicron_gene_S.fasta
+        │   │   omicron_sequences_gisaid.fasta
+        │   │   rbd_exp_attn_ft.pkl
+        │   │   rbd_exp_forward_prob_ft.pkl
+        │   │   rbd_exp_l2_change_ft.pkl
+        │   │   
+        │   └───exp_data
+        │           bind_expr_BA1.csv
+        │           bind_expr_BA2.csv
+        │           bind_expr_WT.csv
+        │           
         ├───results
         │       pc_tree_v1_ft_l2_forward_mode.csv
         │       pc_tree_v1_ft_l2_forward_mode_summary.csv
@@ -51,7 +64,7 @@ You can download our fine tuned [ProtBert model here]() and place under director
 
 ```
 logs
-└───protbert_full_sub_ft_v1
+└───protbert_ft_v1
     └───version_2
         └───checkpoints
             └───epoch=3-step=91.ckpt 
@@ -65,14 +78,15 @@ Tree folders are placed under `data/processed` with the end `v{tree-version}` su
 the tree version. These folders represent the root data folder for experiments.
 
 Root data folders contain: 
-* raw calculated ProtBert values for parent and reference sequences
+* Language Model Calculations from ProtBert for parent and reference sequences
 * A `treebuild` folder with raw nextstrain tree, processed tree nodes, and sequence metadata
 * A `exp_settings` folder with a text file for the trained model path, mutation data and list of training sequences.
-* A `results` folder that contain experimental AUC performance calculations.
+* A `results` folder that contains experimental AUC performance calculations.
+* A `rbd_exp_omicron` folder that contains fitness experiment data.
 
 Data for analysis and prediction for our work is all found under `data/processed/ncbi_tree_v1`
 
-### Raw Calculations
+### Language Model Calculations
 
 Calculated Semantic Change, grammaticality and Attention change values for parent sequences and the reference sequence 
 are saved under the root data folder as: `tree_v1_seq_l2_change_ft.pkl`, `tree_v1_seq_forward_prob_ft.pkl`, `tree_v1_seq_attn_ft.pkl` respectively. 
@@ -97,7 +111,7 @@ for the schema export from Nextstrain.
 Experimental settings are contained in subfolder `exp_settings` which contains:
 
 * Path to finetuned `BioTransformers` ProtBert model saved in `model_folder.txt`
-  * `model_folder.txt` lists a simple relative path such as `logs/protbert_full_sub_ft_v1` for the finetuned ProtBert model.
+  * `model_folder.txt` lists a simple relative path such as `logs/protbert_ft_v1` for the finetuned ProtBert model.
   * Finetuning, Semantic Change and Grammaticality are done with the [Bio-transformers](https://github.com/DeepChainBio/bio-transformers) python wrapper for ProtBert Models
   * Our work uses a pre-trained [ProtBert model](https://github.com/agemagician/ProtTrans)
   * Attention is calculated outside of the Bio-transformers wrapper but with still loading the same finetuned checkpoint as listed in the `model_folder.txt`
@@ -107,7 +121,7 @@ Experimental settings are contained in subfolder `exp_settings` which contains:
   * Mutations in test set also require to be present in child sequences in Nextstrain tree and are applicable for analysis.
     * See section below for Notes on Test Set Mutations for more information.
 * Training sequences in pickled list `train_seq.pkl`
-  * These are sequences used to train ProtBert and represent sequences from `seq_metadata.csv` that occured more than once time in full nucleotide dataset.
+  * These are sequences used to train ProtBert and represent sequences from `seq_metadata.csv` that occurred more than once time in full nucleotide dataset.
   
 #### Notes on Test Set Mutations 
 
@@ -121,7 +135,7 @@ But in the phylogenetic tree, the node mutation may actually be recorded as N414
 from Reference -> Sequence such as K417N -> N417S. In our analysis, we analyze the K417S mutation from parent-child by mutating the parent sequence and attempting to predict mutation N417S, as in the parent sequence, 
 N is at position 417. We compare these results against predictions for K417S when mutating the reference sequence. 
 
-Also common is "shifting" positions when comparing mutations in reference against parent-child. This can happen due to deletetions. 
+Also common is "shifting" positions when comparing mutations in reference against parent-child. This can happen due to deletions. 
 Deletion tokens aren't provided as part of sequences, they are removed to represent the sequence in terms of the natural 20 Amino Acid tokens. 
 Thus a mutation such as K811N in the reference may be aligned as K809N in a parent sequence. 
 
@@ -134,9 +148,20 @@ or we're unable to calculate certain language values that's expecting the change
 
 Results subfolder contain full and summary AUC calculations for mutations. Results are separated by reference experiment and parent-child experiments.
 
+### Fitness Experiment
+
+The subfolder `rbd_exp_omicron` contains data required to analyze wet-lab experimental fitness values compared to language model calculations.
+In `rbd_exp_omicron/exp_data` you can find the DMS results for ACE2-binding and RBD expression downloaded from 
+[https://github.com/jianfcpku/convergent_RBD_evolution](https://github.com/jianfcpku/convergent_RBD_evolution).
+
+Additionally we provide raw GISAID nucleotide sequences and output from Nextclade for spike protein sequence and mutation analysis. 
+Calculated Semantic Change, grammaticality and Attention change values for mutations tested in the wet-lab experiment  
+are saved as: `rbd_exp_l2_change_ft.pkl`, `rbd_exp_forward_prob_ft.pkl`, `rbd_exp_attn_ft.pkl` respectively. 
+
 
 # Usage
 
+See [examples folder](examples) for notebook examples to reproduce figures in our publication.
 
 ## Experiments
 
@@ -161,7 +186,7 @@ python bin/PhyloTreeParsers.py \
     --tree_version 1 > phylo_tree.log 2>&1
 ```
 
-Note our processed tree is availble in the data download.
+Note our processed tree is available in the data download.
 
 ### Mutation Prediction
 
@@ -247,7 +272,7 @@ python bin/RefSeqMutate.py --tree_version 1 \
     > ref_results.log 2>&1
 ```
 
-Simiarly as stated above, it may be beneficial to calculate values separately at first.
+Similarly as stated above, it may be beneficial to calculate values separately at first.
 
 
 
