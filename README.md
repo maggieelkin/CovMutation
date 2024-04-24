@@ -16,7 +16,7 @@ pip install -r requirements.txt
 
 ## Data
 
-You can download [data here]() and place directory under data/processed so that it has this file path:
+You can download [data here](https://www.cse.fau.edu/~xqzhu/dnms/ncbi_tree_v1.zip) and place directory under data/processed so that it has this file path:
 
 ```
 data
@@ -59,7 +59,7 @@ data
 
 ## Model
 
-You can download our fine tuned [ProtBert model here]() and place under directory `logs` so that it has this file path:
+You can download our fine tuned [ProtBert model here](https://www.cse.fau.edu/~xqzhu/dnms/protbert_ft_v1.zip) and place under directory `logs` so that it has this file path:
 
 
 ```
