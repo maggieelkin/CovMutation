@@ -1,7 +1,7 @@
-# Paying Attention to SARS-CoV-2 Dialect
+# Paying Attention to the SARS-CoV-2 Dialect
 
-This repository contains analysis code, links to data and trained models for the paper "Paying Attention to SARS-CoV-2 Dialect: A
-Deep Neural Network Approach to Predicting Novel Mutations" by Magdalyn E. Elkin & Xingquan Zhu. 
+This repository contains analysis code, links to data and trained models for the paper "Paying Attention to the SARS-CoV-2 Dialect: A
+Deep Neural Network Approach to Predicting Novel Protein Mutations" by Magdalyn E. Elkin & Xingquan Zhu. 
 
 ## Requirements
 
