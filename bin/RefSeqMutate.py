@@ -3,8 +3,8 @@ from ParentChildMutate import *
 
 class RefSeqMutateExp(ParentChildMutateExp):
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=True,
-                 cut_off='2022-1-1'):
-        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off)
+                 cut_off='2022-1-1', backend='protbert'):
+        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off, backend)
         self.reference_only = True
 
     def run_experiment(self, csv=True, save_class=False, include_change=True, include_attn=False, save_name=None,
@@ -109,6 +109,8 @@ def parse_args():
                         help='Grammaticality weighting value for DNMS.')
     parser.add_argument('--gamma', type=float, default=1.0,
                         help='Attention Change weighting value for DNMS.')
+    parser.add_argument('--backend', type=str,
+                        help='model to load for biotransformer', default='protbert')
     arguments = parser.parse_args()
     return arguments
 
@@ -121,7 +123,8 @@ if __name__ == "__main__":
                               finetuned=args.finetuned,
                               forward_mode=args.masked_mode,
                               data_folder=args.data_folder,
-                              l1_change=args.l2_norm)
+                              l1_change=args.l2_norm,
+                              backend=args.backend)
 
     print("Finetuned is: {}".format(ref_exp.finetuned))
     print("Forward Mode is: {}".format(ref_exp.forward_mode))
@@ -140,7 +143,7 @@ if __name__ == "__main__":
 
     print(mutate_params)
 
-    parent_child_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
+    ref_exp.run_experiment(include_change=args.include_change, include_attn=args.include_attn,
                                     seq_values_only=args.seq_values_only, csv=args.csv,
-                                    subset_parentids=sub_parentids, seq_values_kwargs=seq_value_params,
+                                    seq_values_kwargs=seq_value_params,
                                     load_previous=args.load_previous, mutate_parents_kwargs=mutate_params)

@@ -15,6 +15,8 @@ def parse_args():
                         help='percentage of sequences for validation')
     parser.add_argument('--epochs', type=int, default=10,
                         help='Number of training epochs')
+    parser.add_argument('--toks_per_batch', type=int, default=2048,
+                        help='Maximum number of token to consider in a batch')
     parser.add_argument('--model_type', type=str, help='Type of biotransformer model', default='protbert')
     arguments = parser.parse_args()
     return arguments
@@ -65,6 +67,7 @@ if __name__ == '__main__':
     print('fine tuning')
     bio_trans.finetune(train, validation_sequences=val, accelerator='ddp', logs_save_dir='logs',
                        checkpoint=chkpoint, save_last_checkpoint=False, amp_level=None,
+                       toks_per_batch=args.toks_per_batch,
                        logs_name_exp=args.log_name,  epochs=args.epochs)
 
 

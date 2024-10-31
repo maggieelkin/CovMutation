@@ -12,6 +12,7 @@ from transformers import BertForMaskedLM, BertTokenizer
 from biotransformers.lightning_utils.data import AlphabetDataLoader
 from biotransformers.lightning_utils.models import LightningModule
 import copy
+import esm
 
 
 def biotrans_probabilities(bio_trans, seqs, batchsize, forward_mode=False):
@@ -78,12 +79,14 @@ def compute_probabilities(bio_trans, seqs, batchsize, chunksize=None, forward_mo
     return seq_probabilities
 
 
-def load_biotrans(model_path=None):
+def load_biotrans(model_path=None, backend='protbert'):
     """
     Loads fine tuned biotransformer if given a model path to a checkpoint file
     Uses the biotransformers wrapper. This has some error when loading fine tuned model with multi-gpu, thus limits
     gpu to 1 if loading.
 
+    :param backend: biotransformer model to load, default is protbert
+    :type backend: str
     :param model_path: path to biotransformer model checkpoint
     :type model_path: str
     :return: biotransformer wrapper
@@ -92,11 +95,11 @@ def load_biotrans(model_path=None):
     n_gpu = torch.cuda.device_count()
     if n_gpu > 1:
         # can be an issue with multi-gpu when loading bio_trans for inference
-       n_gpu = 1
+        n_gpu = 1
     if ray.is_initialized():
         ray.shutdown()
     ray.init()
-    bio_trans = BioTransformers(backend="protbert", num_gpus=n_gpu)
+    bio_trans = BioTransformers(backend=backend, num_gpus=n_gpu)
     if model_path is not None:
         print("Loading Model from: {}".format(model_path))
         bio_trans.load_model(model_path)
@@ -135,7 +138,42 @@ def get_alphabet_dataloader(tokenizer, model_dir):
     return alphabet_dl
 
 
-def load_biotrans_for_attn(device, model_path=None):
+def load_biotrans_for_attn(device, model_path=None, method='protbert', backend=None):
+    """
+    Loads the transformer outside of biotransformer wrapper for calculating attention
+    Biotransformer wrapper package doesn't give ability to output attention, so this has to be loaded outside of
+    wrapper package if calculating attention
+
+    :param backend: Required to pass if method = 'esm'
+    :type backend: str
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
+    :param device: torch device for loading
+    :type device: torch.device
+    :param model_path: path to finetuned checkpoint
+    :type model_path: str
+    :return: tokenizer and transformer model (transformers.models.bert.modeling_bert.BertForMaskedLM)
+    :rtype: tuple
+    """
+    if method == 'protbert':
+        return load_biotrans_for_attn_protbert(device=device, model_path=model_path)
+    elif method == 'esm':
+        if backend is None:
+            raise ValueError('Please provide the backend for ESM model')
+        bio_trans = BioTransformers(backend=backend, num_gpus=0)
+        if model_path is not None:
+            bio_trans.load_model(model_path)
+        bio_trans = bio_trans._language_model._model
+        bio_trans = bio_trans.eval().to(device)
+        _, vocab = esm.pretrained.load_model_and_alphabet(backend)
+        batch_converter = vocab.get_batch_converter()
+        return batch_converter, bio_trans
+
+    else:
+        raise NotImplementedError
+
+
+def load_biotrans_for_attn_protbert(device, model_path=None):
     """
     Loads the transformer outside of biotransformer wrapper for calculating attention
     Biotransformer wrapper package doesn't give ability to output attention, so this has to be loaded outside of
@@ -228,7 +266,48 @@ def get_attention_multiple_seqs(seqs, tokenizer, model, device):
     return sample_attentions
 
 
-def prep_sequences_for_attn(seqs, tokenizer):
+def prep_sequences_for_attn(seqs, tokenizer, method='protbert'):
+    """
+    preps sequences for attention. Sequences get separated with space before passed to tokenizer
+
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
+    :param seqs: list of sequences in string format
+    :type seqs: any
+    :param tokenizer: bert model tokenizer (transformers.models.bert.tokenization_bert.BertTokenizer)
+    or esm data batch converter (esm.data.BatchConverter)
+    :type tokenizer: any
+    :return: formatted input sequences
+    :rtype: torch.Tensor
+    """
+    if method == 'protbert':
+        return prep_sequences_for_attn_protbert(seqs=seqs, tokenizer=tokenizer)
+    elif method == 'esm':
+        return prep_sequences_for_attn_esm(seqs=seqs, batch_converter=tokenizer)
+    else:
+        raise NotImplementedError
+
+
+def prep_sequences_for_attn_esm(seqs, batch_converter):
+    """
+    preps list of sequences for input to model to calculate attention
+    :param seqs: list of sequences
+    :type seqs: list
+    :param batch_converter: converts seqs to tokens
+    :type batch_converter: esm.data.BatchConverter
+    :return:
+    :rtype:
+    """
+    if isinstance(seqs, str):
+        seq_list = [seqs]
+    else:
+        seq_list = seqs
+    inputs = [('', x) for x in seq_list]
+    _, _, batch_tokens = batch_converter(inputs)
+    return batch_tokens
+
+
+def prep_sequences_for_attn_protbert(seqs, tokenizer):
     """
     preps sequences for attention. Sequences get separated with space before passed to tokenizer
 
@@ -250,26 +329,37 @@ def prep_sequences_for_attn(seqs, tokenizer):
     return input_seq_ids
 
 
-def get_attention(seq, tokenizer, model, device):
+def get_attention(seq, tokenizer, model, device, method='protbert'):
     """
     Get attention output for 1 sequence and return numpy array.
     Usage is for the primary sequence of interest.
 
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
     :param seq: sequence input for model
     :type seq: str
     :param tokenizer: tokenizer output from load_biotrans_for_attn
-    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer | esm.data.BatchConverter
     :param model: bio_trans output from load_biotrans_for_attn
-    :type model: transformers.models.bert.modeling_bert.BertForMaskedLM
+    :type model: transformers.models.bert.modeling_bert.BertForMaskedLM | esm.model.ProteinBertModel
     :param device: torch device
     :type device: torch.device
     :return: numpy array attention weights for the sequence of interest
     :rtype: numpy.ndarray
     """
-    input_seq_ids = prep_sequences_for_attn(seqs=seq, tokenizer=tokenizer)
-    with torch.no_grad():
-        attention = model(input_seq_ids.to(device))[-1]
-    layer_attentions = format_attention_torch(attention)
+    if isinstance(seq, list):
+        raise ValueError('Input for get_attention requires one sequence at a time')
+    input_seq_ids = prep_sequences_for_attn(seqs=seq, tokenizer=tokenizer, method=method)
+    if method == 'protbert':
+        with torch.no_grad():
+            attention = model(input_seq_ids.to(device))[-1]
+        layer_attentions = format_attention_torch(attention)
+
+    else:
+        with torch.no_grad():
+            results = model(input_seq_ids.to(device), need_head_weights=True)
+        attention = results['attentions']
+        layer_attentions = attention[0]
     layer_attentions = layer_attentions.cpu().detach().numpy()
     return layer_attentions
 
@@ -507,11 +597,16 @@ def embedding_change_batchs(seqs, bio_trans, seq_batchsize, embedding_batchsize,
 
 
 def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
-                            pool_heads_max=True, pool_layer_max=True, l1_norm=False, subset_mutations=None):
+                            pool_heads_max=True, pool_layer_max=True, l1_norm=False, subset_mutations=None,
+                            method='protbert', backend=None):
     """
     Calculate attention change for sequences in batches
     Incrementally saves output to save_path
 
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
+    :param backend: backend name for biotransformers wrapper package
+    :type backend: str
     :param subset_mutations: needs to be a list of lists of subset_mutations for each seq in seqs, if using a subset
     :type subset_mutations: list
     :param model_path: path of finetuned checkpoint to load biotrans
@@ -532,7 +627,7 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
     :rtype: dict
     """
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path)
+    tokenizer, bio_trans = load_biotrans_for_attn(device=device, model_path=model_path, method=method, backend=backend)
     if seq_attn is None:
         seq_attn_dict = {}
     else:
@@ -545,7 +640,7 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
         mutations_attn = get_mutation_attention_change(seq_to_mutate=seq, bio_trans=bio_trans, tokenizer=tokenizer,
                                                        device=device, pool_heads_max=pool_heads_max,
                                                        pool_layer_max=pool_layer_max, l1_norm=l1_norm,
-                                                       subset_mutations=subset_muts)
+                                                       subset_mutations=subset_muts, method=method)
         seq_attn_dict[seq] = mutations_attn
         if save_path is not None:
             with open(save_path, 'wb') as f:
@@ -553,14 +648,17 @@ def attention_change_batchs(seqs, model_path, seq_attn=None, save_path=None,
     return seq_attn_dict
 
 
-def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
-                                  pool_layer_max=True, l1_norm=False, subset_mutations=None):
+def get_mutation_attention_change_nopool(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
+                                         pool_layer_max=True, l1_norm=False, subset_mutations=None,
+                                         method='protbert'):
     """
     uses multi processing with Ray to calculate attention change for a single sequence
     attention change is calculated from passing each mutated sequence into the bio transformer and returning attention
     matrices and attention change is calculated as difference betwen sequence of interest and the mutated sequence
     Can be computationally expensive so uses multi-processing with Ray for efficiency
 
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
     :param seq_to_mutate: sequence of interest
     :type seq_to_mutate: str
     :param bio_trans: bio_trans output from load_biotrans_for_attn
@@ -584,7 +682,56 @@ def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, p
         ray.shutdown()
         torch.cuda.empty_cache()
     ray.init()
-    ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device)
+    ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device, method=method)
+    ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
+    mutation_seqs = mutate_seq_insilico(seq_to_mutate, subset_mutations=subset_mutations)
+    mutation_seqs = {mutation_seqs[s]['mutation']: s for s in list(mutation_seqs.keys())}
+
+    results = {}
+    for mut, mut_seq in tqdm(mutation_seqs.items()):
+        layer_attentions = get_attention(seq=mut_seq, tokenizer=tokenizer, model=bio_trans, device=device,
+                                         method=method)
+        pooled_attn = pool_attention(layer_attentions, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
+        attn_change = calc_array_distance(array1=ref_attn, array2=pooled_attn, l1_norm=l1_norm)
+        results[mut] = attn_change
+
+    return results
+
+
+def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, pool_heads_max=True,
+                                  pool_layer_max=True, l1_norm=False, subset_mutations=None, method='protbert'):
+    """
+    uses multi processing with Ray to calculate attention change for a single sequence
+    attention change is calculated from passing each mutated sequence into the bio transformer and returning attention
+    matrices and attention change is calculated as difference betwen sequence of interest and the mutated sequence
+    Can be computationally expensive so uses multi-processing with Ray for efficiency
+
+    :param seq_to_mutate: sequence of interest
+    :type seq_to_mutate: str
+    :param bio_trans: bio_trans output from load_biotrans_for_attn
+    :type bio_trans: transformers.models.bert.modeling_bert.BertForMaskedLM
+    :param tokenizer: tokenizer output from load_biotrans_for_attn
+    :type tokenizer: transformers.models.bert.tokenization_bert.BertTokenizer
+    :param device: torch device
+    :type device: torch.device
+    :param pool_heads_max: if true pool heads with max, mean otherwise. Default True
+    :type pool_heads_max: bool
+    :param pool_layer_max: if true pool layers with max, mean otherwise. Default True
+    :type pool_layer_max: bool
+    :param l1_norm: if true, use l1 norm, use l2 norm otherwise. default is false
+    :type l1_norm: bool
+    :param subset_mutations: if provided, calc attention change for only this subset of mutations
+    :type subset_mutations: list
+    :param method: protein language model to use "protbert" or "esm"
+    :type method: str
+    :return: dictionary of key = mutation, value = attention change
+    :rtype: dict
+    """
+    if ray.is_initialized():
+        ray.shutdown()
+        torch.cuda.empty_cache()
+    ray.init()
+    ref_attn = get_attention(seq=seq_to_mutate, tokenizer=tokenizer, model=bio_trans, device=device, method=method)
     ref_attn = pool_attention(ref_attn, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
     mutation_seqs = mutate_seq_insilico(seq_to_mutate, subset_mutations=subset_mutations)
     mutation_seqs = {mutation_seqs[s]['mutation']: s for s in list(mutation_seqs.keys())}
@@ -592,7 +739,8 @@ def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, p
     # Set up ray actors
     model_ref = ray.put(bio_trans)
     n_gpu = torch.cuda.device_count()
-    actor_pool = [BertActor.remote(model=model_ref, device=device, tokenizer=tokenizer) for _ in range(n_gpu)]
+    actor_pool = [BertActor.remote(model=model_ref, device=device, tokenizer=tokenizer, method=method) for _ in
+                  range(n_gpu)]
     # Parallelize the predict_attention() method over the list of mutation dictionaries
     results = []
     for mut, mut_seq in mutation_seqs.items():
@@ -618,13 +766,15 @@ def get_mutation_attention_change(seq_to_mutate, bio_trans, tokenizer, device, p
 # Define a Ray actor class that wraps the model
 @ray.remote(num_cpus=5, num_gpus=1)
 class BertActor:
-    def __init__(self, model, device, tokenizer):
+    def __init__(self, model, device, tokenizer, method='protbert'):
         self.device = device
         self.model = model
         self.tokenizer = tokenizer
+        self.method = method
 
     def predict_attention(self, mut, seq, pool_heads_max=True, pool_layer_max=True):
-        layer_attentions = get_attention(seq=seq, tokenizer=self.tokenizer, model=self.model, device=self.device)
+        layer_attentions = get_attention(seq=seq, tokenizer=self.tokenizer, model=self.model, device=self.device,
+                                         method=self.method)
         pooled_attn = pool_attention(layer_attentions, pool_heads_max=pool_heads_max, pool_layer_max=pool_layer_max)
         return {mut: pooled_attn}
 

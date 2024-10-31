@@ -12,15 +12,15 @@ import json
 
 def candidates_by_mutations(tree_nodes, sig_muts, drop_by_muts=False):
     """
-
-    :param drop_by_muts:
-    :type drop_by_muts:
-    :param tree_nodes:
-    :type tree_nodes:
+    Preps parent-child candidates for mutation by identifing childing with mutations in sig_muts
+    :param drop_by_muts: if True, focus on unique parent sequence & significant mutation
+    :type drop_by_muts: bool
+    :param tree_nodes: tree nodes to search for
+    :type tree_nodes: dict
     :param sig_muts: list of mutations that determine the candidate child nodes
     :type sig_muts: list
-    :return:
-    :rtype:
+    :return: candidate parent id and children id lists
+    :rtype: dict
     """
     # the WT in sig_muts list is in reference to reference (tree root)
     # but the WT in node.node_spike_mutations might be different, but should be same mutation
@@ -127,14 +127,6 @@ def realign_candidates(candidates, tree_nodes, sig_muts, train_seq=None):
 def freq_str(row, mut_str_col, mut_dict):
     """
     function to take a list of mutations and return their values from the mut_dict
-    :param row:
-    :type row:
-    :param mut_str_col:
-    :type mut_str_col:
-    :param mut_dict:
-    :type mut_dict:
-    :return:
-    :rtype:
     """
     mut_str = row[mut_str_col]
     muts = mut_str.split(';')
@@ -162,13 +154,14 @@ def n_unique_muts(grouped):
 
 
 class BioTransExpSettings(object):
-    """
-
-    """
-
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=False,
-                 cut_off='2022-1-1', load_tree=True):
+                 cut_off='2022-1-1', load_tree=True, backend='protbert'):
         self.cut_off = cut_off
+        self.backend = backend
+        if 'esm' in backend:
+            self.method = 'esm'
+        else:
+            self.method = 'protbert'
         self.tree_version = tree_version
         self.finetuned = finetuned
         self.forward_mode = forward_mode
@@ -218,13 +211,10 @@ class BioTransExpSettings(object):
 
 
 class ParentChildMutateExp(BioTransExpSettings):
-    """
-
-    """
 
     def __init__(self, tree_version, data_folder, finetuned=True, forward_mode=True, model_folder=None, l1_change=False,
-                 cut_off='2022-1-1'):
-        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off)
+                 cut_off='2022-1-1', backend='protbert'):
+        super().__init__(tree_version, data_folder, finetuned, forward_mode, model_folder, l1_change, cut_off, backend=backend)
         self.reference_only = False
         self.train_seq = None
         self.mutation_data = None
@@ -381,7 +371,7 @@ class ParentChildMutateExp(BioTransExpSettings):
         else:
             seqs_for_change = []
         if len(seqs_for_proba) > 0 or len(seqs_for_change) > 0:
-            bio_trans = load_biotrans(model_path=self.model_path)
+            bio_trans = load_biotrans(model_path=self.model_path, backend=self.backend)
             if len(seqs_for_proba) > 0:
                 print('computing probabilities for {} sequences'.format(len(seqs_for_proba)))
                 self.seq_probabilities = compute_probabilities(bio_trans=bio_trans, seqs=seqs_for_proba,
@@ -430,7 +420,10 @@ class ParentChildMutateExp(BioTransExpSettings):
                                                        seq_attn=current_seq_attn,
                                                        save_path=current_save_path,
                                                        pool_heads_max=pool_heads_max,
-                                                       pool_layer_max=pool_layer_max, l1_norm=l1_norm)
+                                                       pool_layer_max=pool_layer_max,
+                                                       l1_norm=l1_norm,
+                                                       method=self.method,
+                                                       backend=self.backend)
             print('Saving {} sequence attention change'.format(len(current_seq_attn)))
             with open(current_save_path, 'wb') as a:
                 pickle.dump(current_seq_attn, a)
